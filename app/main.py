@@ -7,7 +7,11 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .devin_client import DevinClient
@@ -45,6 +49,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="superset-x-devin", lifespan=lifespan)
+STATIC = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def dashboard():
+    return FileResponse(STATIC / "dashboard.html")
+
+
+@app.get("/issues/{number}", include_in_schema=False)
+async def issue_page(number: int):
+    return FileResponse(STATIC / "issue.html")
 
 
 def verify_signature(secret: str, body: bytes, signature_header: str | None) -> bool:
