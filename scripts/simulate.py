@@ -46,6 +46,9 @@ def fake_issue(number: int, title: str, body: str) -> dict:
         "body": body,
         "html_url": f"https://github.com/{REPO}/issues/{number}",
         "user": {"login": "simulated-user"},
+        "labels": [{"name": os.getenv("ELIGIBILITY_LABEL", "devin-remediate")}] if os.getenv(
+            "ELIGIBILITY_LABEL", "devin-remediate"
+        ) else [],
     }
 
 

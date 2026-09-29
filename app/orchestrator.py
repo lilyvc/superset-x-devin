@@ -19,42 +19,14 @@ label, and dispatching the remediation workflow itself.
 
 import asyncio
 import logging
-from typing import Any
 
 from .config import Settings
-from .devin_client import DevinClient, SUMMARY_SCHEMA
+from .devin_client import SUMMARY_SCHEMA, DevinClient
+from .devin_status import _session_state
 from .github_client import GitHubClient
 from .store import Store
 
 logger = logging.getLogger("orchestrator")
-
-FINAL_STATUSES = {"finished", "expired", "exit", "error"}
-WAITING_STATUSES = {"blocked", "suspend_requested", "suspend_requested_frontend"}
-# Whether a settled v3 session ended in a question vs a result is decided by
-# status_detail ("waiting_for_user" = question for a human).
-V3_WAITING_DETAILS = {"waiting_for_user"}
-
-
-def _session_state(session: dict) -> tuple[str, str]:
-    """Normalize v1/v3 session objects to (settled_in, kind).
-
-    Returns (status, kind) where kind is 'final', 'waiting', or 'running'.
-    """
-    enum = session.get("status_enum")
-    if enum:  # v1
-        if enum in WAITING_STATUSES:
-            return enum, "waiting"
-        if enum in FINAL_STATUSES:
-            return enum, "final"
-        return enum, "running"
-    status = session.get("status") or ""
-    detail = session.get("status_detail") or ""
-    if status in {"exit", "error"}:
-        return status, "final"
-    if status == "suspended" or detail in V3_WAITING_DETAILS:
-        kind = "waiting" if detail in V3_WAITING_DETAILS else "final"
-        return f"{status}:{detail}" if detail else status, kind
-    return status or detail, "running"
 
 SUMMARY_PROMPT_TEMPLATE = """You are triaging a GitHub issue in the repository {repo}.
 

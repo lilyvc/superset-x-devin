@@ -1,20 +1,39 @@
-"""SQLite-backed state for delivery dedup and issue -> Devin session mapping.
+"""SQLite persistence for workflow state, sessions, events, and webhook dedup."""
 
-Kept deliberately small: it is enough to deduplicate webhook retries and to
-resume the right Devin session when someone replies to its question on an
-issue. A richer dispatch state machine is tracked in TODO.md.
-"""
-
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from typing import Any
+
+JSON_WORKFLOW_FIELDS = {"labels", "investigation", "remediation", "analysis"}
+JSON_SESSION_FIELDS = {"structured_output", "pull_requests"}
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value if value is not None else {}, sort_keys=True)
+
+
+def _decode(row: sqlite3.Row | dict, fields: set[str]) -> dict:
+    result = dict(row)
+    for field in fields:
+        if result.get(field):
+            try:
+                result[field] = json.loads(result[field])
+            except (TypeError, json.JSONDecodeError):
+                pass
+    return result
 
 
 class Store:
     def __init__(self, db_path: str):
         self._db_path = db_path
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._init_schema()
 
     @contextmanager
@@ -33,90 +52,220 @@ class Store:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS deliveries (
-                    delivery_id TEXT PRIMARY KEY,
-                    received_at TEXT NOT NULL
+                    delivery_id TEXT PRIMARY KEY, received_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS issues (
-                    repo TEXT NOT NULL,
-                    issue_number INTEGER NOT NULL,
-                    session_id TEXT,
-                    session_url TEXT,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
+                    repo TEXT NOT NULL, issue_number INTEGER NOT NULL,
+                    session_id TEXT, session_url TEXT, status TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     last_comment_id INTEGER DEFAULT 0,
                     PRIMARY KEY (repo, issue_number)
                 );
+                CREATE TABLE IF NOT EXISTS workflows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo TEXT NOT NULL, issue_number INTEGER NOT NULL,
+                    title TEXT, issue_url TEXT, author TEXT, labels TEXT,
+                    state TEXT NOT NULL, needs_info_kind TEXT,
+                    attempt INTEGER DEFAULT 0, remediation_attempts INTEGER DEFAULT 0,
+                    pr_url TEXT, pr_number INTEGER, failure_reason TEXT,
+                    investigation TEXT, remediation TEXT, analysis TEXT,
+                    last_comment_id INTEGER DEFAULT 0, discovered_at TEXT,
+                    started_at TEXT, investigated_at TEXT, reproduced_at TEXT,
+                    root_cause_at TEXT, remediation_started_at TEXT,
+                    pr_opened_at TEXT, completed_at TEXT, waiting_since TEXT,
+                    updated_at TEXT, UNIQUE(repo, issue_number)
+                );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY, workflow_id INTEGER NOT NULL,
+                    role TEXT NOT NULL, url TEXT, devin_status TEXT,
+                    devin_status_detail TEXT, acus REAL,
+                    structured_output TEXT, output_fingerprint TEXT,
+                    acted_fingerprint TEXT DEFAULT '', pull_requests TEXT,
+                    created_at TEXT, last_polled_at TEXT, finished_at TEXT,
+                    active INTEGER DEFAULT 1, attempts INTEGER DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER,
+                    at TEXT NOT NULL, kind TEXT NOT NULL, from_state TEXT,
+                    to_state TEXT, detail TEXT
+                );
                 """
             )
-            # Migration for DBs created before last_comment_id existed.
-            cols = {
-                r[1]
-                for r in conn.execute("PRAGMA table_info(issues)").fetchall()
-            }
-            if "last_comment_id" not in cols:
-                conn.execute(
-                    "ALTER TABLE issues ADD COLUMN last_comment_id INTEGER DEFAULT 0"
-                )
+            self._ensure_columns(conn, "sessions", {
+                "acted_fingerprint": "TEXT DEFAULT ''", "attempts": "INTEGER DEFAULT 0",
+            })
+            self._ensure_columns(conn, "workflows", {
+                "updated_at": "TEXT", "last_comment_id": "INTEGER DEFAULT 0",
+            })
+
+    @staticmethod
+    def _ensure_columns(conn, table: str, columns: dict[str, str]) -> None:
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     def mark_delivery(self, delivery_id: str) -> bool:
-        """Record a webhook delivery. Returns False if already seen."""
-        now = datetime.now(timezone.utc).isoformat()
         try:
             with self._conn() as conn:
-                conn.execute(
-                    "INSERT INTO deliveries (delivery_id, received_at) VALUES (?, ?)",
-                    (delivery_id, now),
-                )
+                conn.execute("INSERT INTO deliveries VALUES (?, ?)", (delivery_id, utcnow()))
             return True
         except sqlite3.IntegrityError:
             return False
 
-    def record_dispatch(
-        self, repo: str, issue_number: int, session_id: str, session_url: str, status: str
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+    def upsert_workflow(self, repo: str, issue_number: int, **fields) -> dict:
+        fields = dict(fields)
+        fields.setdefault("updated_at", utcnow())
+        fields.setdefault("state", "DISCOVERED")
+        columns = ["repo", "issue_number"] + list(fields)
+        values = [repo, issue_number] + [
+            _json(fields[c]) if c in JSON_WORKFLOW_FIELDS else fields[c] for c in fields
+        ]
+        updates = ", ".join(f"{c}=excluded.{c}" for c in fields if c != "state")
         with self._conn() as conn:
             conn.execute(
-                """
-                INSERT INTO issues (repo, issue_number, session_id, session_url, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (repo, issue_number) DO UPDATE SET
-                    session_id = excluded.session_id,
-                    session_url = excluded.session_url,
-                    status = excluded.status,
-                    updated_at = excluded.updated_at
-                """,
-                (repo, issue_number, session_id, session_url, status, now, now),
+                f"INSERT INTO workflows ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)}) "
+                f"ON CONFLICT(repo,issue_number) DO UPDATE SET {updates or 'updated_at=excluded.updated_at'}",
+                values,
             )
+        return self.get_workflow(repo, issue_number)
 
-    def update_status(self, repo: str, issue_number: int, status: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE issues SET status = ?, updated_at = ? WHERE repo = ? AND issue_number = ?",
-                (status, now, repo, issue_number),
-            )
-
-    def set_last_comment_id(self, repo: str, issue_number: int, comment_id: int) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE issues SET last_comment_id = ?, updated_at = ? WHERE repo = ? AND issue_number = ?",
-                (comment_id, now, repo, issue_number),
-            )
-
-    def list_tracked_issues(self) -> list[dict]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM issues WHERE session_id IS NOT NULL"
-            ).fetchall()
-        return [dict(r) for r in rows]
-
-    def get_issue(self, repo: str, issue_number: int) -> dict | None:
+    def get_workflow(self, repo: str, issue_number: int) -> dict | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM issues WHERE repo = ? AND issue_number = ?",
-                (repo, issue_number),
+                "SELECT * FROM workflows WHERE repo=? AND issue_number=?", (repo, issue_number)
             ).fetchone()
+        return _decode(row, JSON_WORKFLOW_FIELDS) if row else None
+
+    def get_workflow_by_id(self, workflow_id: int) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
+        return _decode(row, JSON_WORKFLOW_FIELDS) if row else None
+
+    def list_workflows(self, states=None) -> list[dict]:
+        with self._conn() as conn:
+            if states:
+                vals = [getattr(s, "value", s) for s in states]
+                rows = conn.execute(
+                    f"SELECT * FROM workflows WHERE state IN ({','.join('?' for _ in vals)}) "
+                    "ORDER BY discovered_at, id", vals
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM workflows ORDER BY discovered_at, id").fetchall()
+        return [_decode(r, JSON_WORKFLOW_FIELDS) for r in rows]
+
+    def set_state(self, workflow_id: int, state, **fields) -> dict | None:
+        state = getattr(state, "value", state)
+        old = self.get_workflow_by_id(workflow_id)
+        fields.update(state=state, updated_at=utcnow())
+        assignments, values = [], []
+        for key, value in fields.items():
+            assignments.append(f"{key}=?")
+            values.append(_json(value) if key in JSON_WORKFLOW_FIELDS else value)
+        values.append(workflow_id)
+        with self._conn() as conn:
+            conn.execute(f"UPDATE workflows SET {','.join(assignments)} WHERE id=?", values)
+        if old and old.get("state") != state:
+            self.add_event(workflow_id, "transition", old.get("state"), state)
+        return self.get_workflow_by_id(workflow_id)
+
+    def add_event(self, workflow_id: int | None, kind: str, from_state=None,
+                  to_state=None, detail: Any = None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO events(workflow_id,at,kind,from_state,to_state,detail) VALUES(?,?,?,?,?,?)",
+                (workflow_id, utcnow(), kind, getattr(from_state, "value", from_state),
+                 getattr(to_state, "value", to_state),
+                 json.dumps(detail, sort_keys=True) if isinstance(detail, (dict, list)) else detail),
+            )
+
+    def get_events(self, workflow_id: int) -> list[dict]:
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM events WHERE workflow_id=? ORDER BY id", (workflow_id,)
+            ).fetchall()]
+
+    def record_session(self, **fields) -> dict:
+        fields.setdefault("created_at", utcnow())
+        fields.setdefault("active", 1)
+        fields.setdefault("structured_output", {})
+        fields.setdefault("pull_requests", [])
+        columns = list(fields)
+        values = [_json(fields[c]) if c in JSON_SESSION_FIELDS else fields[c] for c in columns]
+        with self._conn() as conn:
+            conn.execute(
+                f"INSERT INTO sessions({','.join(columns)}) VALUES ({','.join('?' for _ in columns)}) "
+                "ON CONFLICT(session_id) DO UPDATE SET workflow_id=excluded.workflow_id, role=excluded.role, "
+                "url=excluded.url, active=excluded.active",
+                values,
+            )
+        return self.get_session(fields["session_id"])
+
+    def update_session(self, session_id: str, **fields) -> dict | None:
+        if not fields:
+            return self.get_session(session_id)
+        assignments, values = [], []
+        for key, value in fields.items():
+            assignments.append(f"{key}=?")
+            values.append(_json(value) if key in JSON_SESSION_FIELDS else value)
+        values.append(session_id)
+        with self._conn() as conn:
+            conn.execute(f"UPDATE sessions SET {','.join(assignments)} WHERE session_id=?", values)
+        return self.get_session(session_id)
+
+    def get_session(self, session_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+        return _decode(row, JSON_SESSION_FIELDS) if row else None
+
+    def get_sessions(self, workflow_id: int, role=None, active_only=False) -> list[dict]:
+        query, values = "SELECT * FROM sessions WHERE workflow_id=?", [workflow_id]
+        if role:
+            query += " AND role=?"
+            values.append(getattr(role, "value", role))
+        if active_only:
+            query += " AND active=1"
+        query += " ORDER BY created_at"
+        with self._conn() as conn:
+            rows = conn.execute(query, values).fetchall()
+        return [_decode(r, JSON_SESSION_FIELDS) for r in rows]
+
+    def count_active_sessions(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT count(*) FROM sessions WHERE active=1").fetchone()[0]
+
+    def list_active_sessions(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM sessions WHERE active=1 ORDER BY created_at").fetchall()
+        return [_decode(r, JSON_SESSION_FIELDS) for r in rows]
+
+    # Compatibility methods retained for old callers and migration safety.
+    def record_dispatch(self, repo, issue_number, session_id, session_url, status):
+        workflow = self.get_workflow(repo, issue_number) or self.upsert_workflow(
+            repo, issue_number, state="QUEUED"
+        )
+        self.record_session(session_id=session_id, workflow_id=workflow["id"],
+                            role="investigator", url=session_url, devin_status=status)
+
+    def update_status(self, repo, issue_number, status):
+        with self._conn() as conn:
+            conn.execute("UPDATE issues SET status=?,updated_at=? WHERE repo=? AND issue_number=?",
+                         (status, utcnow(), repo, issue_number))
+
+    def set_last_comment_id(self, repo, issue_number, comment_id):
+        workflow = self.get_workflow(repo, issue_number)
+        if workflow:
+            self.set_state(workflow["id"], workflow["state"], last_comment_id=comment_id)
+        with self._conn() as conn:
+            conn.execute("UPDATE issues SET last_comment_id=?,updated_at=? WHERE repo=? AND issue_number=?",
+                         (comment_id, utcnow(), repo, issue_number))
+
+    def list_tracked_issues(self):
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute("SELECT * FROM issues WHERE session_id IS NOT NULL")]
+
+    def get_issue(self, repo, issue_number):
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM issues WHERE repo=? AND issue_number=?",
+                               (repo, issue_number)).fetchone()
         return dict(row) if row else None

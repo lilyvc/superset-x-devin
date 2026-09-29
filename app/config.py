@@ -37,6 +37,14 @@ class Settings:
     # Optional label applied to issues once a Devin session has been dispatched.
     remediation_label: str = os.getenv("REMEDIATION_LABEL", "")
 
+    eligibility_label: str = os.getenv("ELIGIBILITY_LABEL", "devin-remediate")
+    max_concurrent_devins: int = int(os.getenv("MAX_CONCURRENT_DEVINS", "3"))
+    max_remediation_attempts: int = int(os.getenv("MAX_REMEDIATION_ATTEMPTS", "2"))
+    analysis_enabled: bool = _env_bool("ANALYSIS_ENABLED", True)
+    investigator_acu_limit: int = int(os.getenv("INVESTIGATOR_ACU_LIMIT", "10"))
+    remediator_acu_limit: int = int(os.getenv("REMEDIATOR_ACU_LIMIT", "25"))
+    analyst_acu_limit: int = int(os.getenv("ANALYST_ACU_LIMIT", "8"))
+
     db_path: str = os.getenv("DB_PATH", "orchestrator.db")
 
     # Polling mode: watch the target repo for new issues/comments instead of
@@ -47,7 +55,9 @@ class Settings:
     )
     # When false, issues that already exist at startup are baselined (not
     # dispatched); when true the open-issues backlog is dispatched too.
-    poll_backlog: bool = _env_bool("POLL_BACKLOG", False)
+    poll_backlog: bool = _env_bool(
+        "POLL_BACKLOG", bool(os.getenv("ELIGIBILITY_LABEL", "devin-remediate"))
+    )
 
     @property
     def devin_use_v3(self) -> bool:

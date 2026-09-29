@@ -53,6 +53,11 @@ token — no code changes needed.
 | `DEVIN_API_BASE_URL` | no | Defaults to `https://api.devin.ai` |
 | `POLL_INTERVAL_SECONDS` / `POLL_TIMEOUT_SECONDS` | no | Devin session polling cadence (10s / 30min defaults) |
 | `MAX_ACU_LIMIT` | no | Cap ACUs per spawned Devin session |
+| `ELIGIBILITY_LABEL` | no | Label required for discovery (default `devin-remediate`; empty means every open issue) |
+| `MAX_CONCURRENT_DEVINS` | no | Maximum number of active Devin sessions (default 3) |
+| `MAX_REMEDIATION_ATTEMPTS` | no | Verification iterations per remediation (default 2) |
+| `ANALYSIS_ENABLED` | no | Dispatch engineering analysis sessions (default true) |
+| `INVESTIGATOR_ACU_LIMIT` / `REMEDIATOR_ACU_LIMIT` / `ANALYST_ACU_LIMIT` | no | Per-role ACU limits (10 / 25 / 8) |
 | `REMEDIATION_LABEL` | no | Label applied to an issue when dispatched, e.g. `devin-remediation-started` |
 | `DB_PATH` | no | SQLite path (default `orchestrator.db`; `/data` under compose) |
 | `ENABLE_POLLING` | no | `true` = poll GitHub for new issues/comments instead of needing a webhook |

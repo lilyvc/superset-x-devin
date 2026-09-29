@@ -15,24 +15,42 @@ class GitHubClient:
             timeout=30.0,
         )
 
-    async def list_open_issues(self, repo: str, per_page: int = 50) -> list[dict]:
-        resp = await self._client.get(
-            f"/repos/{repo}/issues",
-            params={
-                "state": "open",
-                "sort": "created",
-                "direction": "desc",
-                "per_page": per_page,
-            },
-        )
+    async def list_open_issues(self, repo: str, per_page: int = 100) -> list[dict]:
+        issues: list[dict] = []
+        for page in range(1, 101):
+            resp = await self._client.get(
+                f"/repos/{repo}/issues",
+                params={"state": "open", "sort": "created", "direction": "asc",
+                        "per_page": per_page, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            issues.extend(batch)
+            if len(batch) < per_page:
+                break
+        return [issue for issue in issues if "pull_request" not in issue]
+
+    async def get_issue(self, repo: str, issue_number: int) -> dict:
+        resp = await self._client.get(f"/repos/{repo}/issues/{issue_number}")
         resp.raise_for_status()
         return resp.json()
 
     async def list_issue_comments(self, repo: str, issue_number: int) -> list[dict]:
-        resp = await self._client.get(
-            f"/repos/{repo}/issues/{issue_number}/comments",
-            params={"per_page": 100},
-        )
+        comments: list[dict] = []
+        for page in range(1, 101):
+            resp = await self._client.get(
+                f"/repos/{repo}/issues/{issue_number}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            comments.extend(batch)
+            if len(batch) < 100:
+                break
+        return comments
+
+    async def get_authenticated_user(self) -> dict:
+        resp = await self._client.get("/user")
         resp.raise_for_status()
         return resp.json()
 
