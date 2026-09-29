@@ -43,8 +43,9 @@ summarizes → comment posted → replies forward back into the same session.
 - [ ] Handle the suspended case: `send_message` requires a running session —
       detect `blocked`/`suspend_requested` and resume before sending, or surface
       "session expired, redispatch?" back on the issue.
-- [ ] Ignore the orchestrator's own comments (and bot accounts generally) so a
-      posted summary/question can't be forwarded back into the session as a "reply".
+- [x] Ignore the orchestrator's own comments (and bot accounts generally) so a
+      posted summary/question can't be forwarded back into the session as a "reply"
+      (done for the polling path — comments from `type: Bot` users are skipped).
 - [ ] Distinguish a **question reply** from an explicit **command** (`/devin fix`,
       `/devin stop`) so humans can steer the workflow from the issue thread.
 

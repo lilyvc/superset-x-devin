@@ -39,6 +39,16 @@ class Settings:
 
     db_path: str = os.getenv("DB_PATH", "orchestrator.db")
 
+    # Polling mode: watch the target repo for new issues/comments instead of
+    # (or in addition to) webhooks. No public URL needed.
+    enable_polling: bool = _env_bool("ENABLE_POLLING", False)
+    github_poll_interval_seconds: float = float(
+        os.getenv("GITHUB_POLL_INTERVAL_SECONDS", "30")
+    )
+    # When false, issues that already exist at startup are baselined (not
+    # dispatched); when true the open-issues backlog is dispatched too.
+    poll_backlog: bool = _env_bool("POLL_BACKLOG", False)
+
     @property
     def devin_use_v3(self) -> bool:
         return bool(self.devin_org_id)

@@ -15,6 +15,27 @@ class GitHubClient:
             timeout=30.0,
         )
 
+    async def list_open_issues(self, repo: str, per_page: int = 50) -> list[dict]:
+        resp = await self._client.get(
+            f"/repos/{repo}/issues",
+            params={
+                "state": "open",
+                "sort": "created",
+                "direction": "desc",
+                "per_page": per_page,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def list_issue_comments(self, repo: str, issue_number: int) -> list[dict]:
+        resp = await self._client.get(
+            f"/repos/{repo}/issues/{issue_number}/comments",
+            params={"per_page": 100},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def post_issue_comment(self, repo: str, issue_number: int, body: str) -> dict:
         resp = await self._client.post(
             f"/repos/{repo}/issues/{issue_number}/comments", json={"body": body}

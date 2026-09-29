@@ -1,5 +1,6 @@
 """FastAPI entrypoint: receives GitHub webhooks and hands them to the orchestrator."""
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -9,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from .config import get_settings
 from .orchestrator import Orchestrator
+from .poller import run_poller
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +26,15 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = Orchestrator(settings)
     if settings.dry_run:
         logger.warning("DRY_RUN is on — no Devin or GitHub calls will be made")
+    poller_task = None
+    if settings.enable_polling:
+        logger.info("polling mode enabled for %s", settings.target_repo)
+        poller_task = asyncio.create_task(
+            run_poller(app.state.orchestrator, settings)
+        )
     yield
+    if poller_task:
+        poller_task.cancel()
     await app.state.orchestrator.devin.aclose()
     await app.state.orchestrator.github.aclose()
 

@@ -55,6 +55,9 @@ token — no code changes needed.
 | `MAX_ACU_LIMIT` | no | Cap ACUs per spawned Devin session |
 | `REMEDIATION_LABEL` | no | Label applied to an issue when dispatched, e.g. `devin-remediation-started` |
 | `DB_PATH` | no | SQLite path (default `orchestrator.db`; `/data` under compose) |
+| `ENABLE_POLLING` | no | `true` = poll GitHub for new issues/comments instead of needing a webhook |
+| `GITHUB_POLL_INTERVAL_SECONDS` | no | Poll cadence (default 30) |
+| `POLL_BACKLOG` | no | `true` = also dispatch issues that existed before startup (default: baseline, only new issues) |
 
 ## Run
 
@@ -95,6 +98,19 @@ python scripts/simulate.py issue-opened --real --number 4
 
 The simulated comment is written to the server log. Turn off `DRY_RUN` and set real
 credentials to run end-to-end for real — the same `simulate.py` calls drive it.
+
+## Polling mode (no webhook needed)
+
+If you can't add a webhook or expose a URL — e.g. just trying it out — run with
+`ENABLE_POLLING=true`. The service then polls the GitHub API itself: new issues
+opened after startup get dispatched to Devin, and new human comments on tracked
+issues are forwarded into their sessions (bot comments, including the
+orchestrator's own, are ignored). `POLL_BACKLOG=true` also dispatches the
+existing open-issues backlog instead of baselining it.
+
+```bash
+ENABLE_POLLING=true TARGET_REPO=lilyvc/superset uvicorn app.main:app --port 8000
+```
 
 ## Point GitHub at it (real events)
 

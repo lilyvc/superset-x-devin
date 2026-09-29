@@ -44,10 +44,20 @@ class Store:
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    last_comment_id INTEGER DEFAULT 0,
                     PRIMARY KEY (repo, issue_number)
                 );
                 """
             )
+            # Migration for DBs created before last_comment_id existed.
+            cols = {
+                r[1]
+                for r in conn.execute("PRAGMA table_info(issues)").fetchall()
+            }
+            if "last_comment_id" not in cols:
+                conn.execute(
+                    "ALTER TABLE issues ADD COLUMN last_comment_id INTEGER DEFAULT 0"
+                )
 
     def mark_delivery(self, delivery_id: str) -> bool:
         """Record a webhook delivery. Returns False if already seen."""
@@ -87,6 +97,21 @@ class Store:
                 "UPDATE issues SET status = ?, updated_at = ? WHERE repo = ? AND issue_number = ?",
                 (status, now, repo, issue_number),
             )
+
+    def set_last_comment_id(self, repo: str, issue_number: int, comment_id: int) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE issues SET last_comment_id = ?, updated_at = ? WHERE repo = ? AND issue_number = ?",
+                (comment_id, now, repo, issue_number),
+            )
+
+    def list_tracked_issues(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM issues WHERE session_id IS NOT NULL"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_issue(self, repo: str, issue_number: int) -> dict | None:
         with self._conn() as conn:
