@@ -28,8 +28,33 @@ from .store import Store
 
 logger = logging.getLogger("orchestrator")
 
-FINAL_STATUSES = {"finished", "expired"}
+FINAL_STATUSES = {"finished", "expired", "exit", "error"}
 WAITING_STATUSES = {"blocked", "suspend_requested", "suspend_requested_frontend"}
+# Whether a settled v3 session ended in a question vs a result is decided by
+# status_detail ("waiting_for_user" = question for a human).
+V3_WAITING_DETAILS = {"waiting_for_user"}
+
+
+def _session_state(session: dict) -> tuple[str, str]:
+    """Normalize v1/v3 session objects to (settled_in, kind).
+
+    Returns (status, kind) where kind is 'final', 'waiting', or 'running'.
+    """
+    enum = session.get("status_enum")
+    if enum:  # v1
+        if enum in WAITING_STATUSES:
+            return enum, "waiting"
+        if enum in FINAL_STATUSES:
+            return enum, "final"
+        return enum, "running"
+    status = session.get("status") or ""
+    detail = session.get("status_detail") or ""
+    if status in {"exit", "error"}:
+        return status, "final"
+    if status == "suspended" or detail in V3_WAITING_DETAILS:
+        kind = "waiting" if detail in V3_WAITING_DETAILS else "final"
+        return f"{status}:{detail}" if detail else status, kind
+    return status or detail, "running"
 
 SUMMARY_PROMPT_TEMPLATE = """You are triaging a GitHub issue in the repository {repo}.
 
@@ -62,7 +87,9 @@ class Orchestrator:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.store = Store(settings.db_path)
-        self.devin = DevinClient(settings.devin_api_key, settings.devin_api_base_url)
+        self.devin = DevinClient(
+            settings.devin_api_key, settings.devin_api_base_url, settings.devin_org_id
+        )
         self.github = GitHubClient(settings.github_token, settings.github_api_url)
 
     # -- event handlers -----------------------------------------------------
@@ -158,19 +185,28 @@ class Orchestrator:
             self.store.update_status(repo, issue_number, "poll_failed")
             return
 
-        status = session.get("status_enum") or session.get("status") or "unknown"
+        status, kind = _session_state(session)
         output = session.get("structured_output") or {}
         summary = output.get("summary") if isinstance(output, dict) else None
         text = summary or _last_devin_message(session) or "(no output produced)"
 
-        if status in WAITING_STATUSES:
+        # A filled structured_output means the task completed — v3 sessions go
+        # "waiting_for_user" once idle, which covers both finished work and a
+        # question for a human, so output presence wins over the waiting kind.
+        if summary:
+            extra = ""
+            if isinstance(output, dict) and output.get("suggested_next_step"):
+                extra = f"\n\n**Suggested next step:** {output['suggested_next_step']}"
+            body = f"**Devin summary** ([session]({session.get('url', '')})):\n\n{text}{extra}"
+            self.store.update_status(repo, issue_number, "summarized")
+        elif kind == "waiting":
             body = (
                 f"**Devin session** [{session_id}]({session.get('url', '')}) has a question:\n\n"
                 f"> {text}\n\n"
                 "_Reply here and it will be forwarded back to the session._"
             )
             self.store.update_status(repo, issue_number, "waiting_on_reply")
-        elif status == "finished":
+        elif kind == "final" and status not in {"expired", "error", "exit"}:
             extra = ""
             if isinstance(output, dict) and output.get("suggested_next_step"):
                 extra = f"\n\n**Suggested next step:** {output['suggested_next_step']}"
@@ -209,8 +245,8 @@ class Orchestrator:
         waited = 0.0
         while waited < self.settings.poll_timeout_seconds:
             session = await self.devin.get_session(session_id)
-            status = session.get("status_enum") or ""
-            if status in FINAL_STATUSES or status in WAITING_STATUSES:
+            _, kind = _session_state(session)
+            if kind in {"final", "waiting"}:
                 return session
             await asyncio.sleep(self.settings.poll_interval_seconds)
             waited += self.settings.poll_interval_seconds

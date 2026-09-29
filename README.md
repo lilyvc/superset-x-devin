@@ -30,7 +30,9 @@ Roadmap items (dispatch idempotency, remediation workflow, labels) live in [TODO
 ## Prerequisites
 
 - Python 3.12+ or Docker
-- A **Devin API key** — create a service-user key in the Devin web app (Settings → API)
+- A **Devin API credential** — either a service-user API key or a personal access
+  token (PAT), both created in the Devin web app under **Settings → Devin API**.
+  PATs also need `DEVIN_ORG_ID` (they use the org-scoped v3 API).
 - A **GitHub token** with `issues: write` on the target repo (a fine-grained PAT scoped to the repo works)
 - A **webhook secret** — any random string, e.g. `openssl rand -hex 32`
 
@@ -43,7 +45,8 @@ token — no code changes needed.
 | Variable | Required | Purpose |
 |---|---|---|
 | `TARGET_REPO` | yes | `owner/name` to watch, e.g. `lilyvc/superset` |
-| `DEVIN_API_KEY` | yes* | Devin v1 API key (`* `not needed with `DRY_RUN=true`) |
+| `DEVIN_API_KEY` | yes* | Devin API credential — service-user key or PAT (`*`not needed with `DRY_RUN=true`) |
+| `DEVIN_ORG_ID` | with PAT | `org-...` id; selects the org-scoped v3 API. Leave empty for service-user keys (v1) |
 | `GITHUB_TOKEN` | yes* | Token with issues write on the target repo |
 | `GITHUB_WEBHOOK_SECRET` | recommended | Must match the webhook's secret; requests without a valid `X-Hub-Signature-256` are rejected |
 | `DRY_RUN` | no | `true` = run the whole pipeline with no external calls (comments are logged) |

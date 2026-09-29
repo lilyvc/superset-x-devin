@@ -19,6 +19,9 @@ class Settings:
 
     devin_api_key: str = os.getenv("DEVIN_API_KEY", "")
     devin_api_base_url: str = os.getenv("DEVIN_API_BASE_URL", "https://api.devin.ai")
+    # Set when authenticating with a Personal Access Token (cog_ user PAT):
+    # PATs use the org-scoped v3 API; service-user keys use v1. Leave empty for v1.
+    devin_org_id: str = os.getenv("DEVIN_ORG_ID", "")
 
     # When true, no external calls are made: the "Devin session" is faked and
     # the GitHub comment is logged instead of posted. Used by scripts/simulate.py
@@ -35,6 +38,10 @@ class Settings:
     remediation_label: str = os.getenv("REMEDIATION_LABEL", "")
 
     db_path: str = os.getenv("DB_PATH", "orchestrator.db")
+
+    @property
+    def devin_use_v3(self) -> bool:
+        return bool(self.devin_org_id)
 
     @property
     def repo_owner(self) -> str:
