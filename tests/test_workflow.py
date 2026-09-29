@@ -91,7 +91,8 @@ class FakeGitHub:
 def _settings(tmp_path, **kwargs):
     defaults = {"target_repo": "owner/repo", "db_path": str(tmp_path / "test.db"),
                 "dry_run": True, "poll_backlog": True, "eligibility_label": "",
-                "max_concurrent_devins": 3}
+                "max_concurrent_devins": 3, "triage_enabled": False,
+                "max_new_issues_per_poll": 10, "ignore_labels": (), "ignore_issue_types": ()}
     defaults.update(kwargs)
     return Settings(**defaults)
 
@@ -202,6 +203,108 @@ def test_merged_pr_reaches_completed(tmp_path):
     github.pull = {"state": "closed", "merged": True}
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.COMPLETED.value
+
+
+def _issue(number=1, **kwargs):
+    issue = {"number": number, "title": "Bug", "body": "body",
+             "html_url": f"https://github.com/owner/repo/issues/{number}",
+             "user": {"login": "reporter"}, "labels": []}
+    issue.update(kwargs)
+    return issue
+
+
+def test_autonomous_intake_triages_then_investigates(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True)
+    github = FakeGitHub([_issue()])
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.TRIAGING.value
+    assert [s["role"] for s in store.get_sessions(workflow["id"])] == ["triage"]
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
+    assert {s["role"] for s in store.get_sessions(workflow["id"])} == {"triage", "investigator"}
+
+
+def test_triage_skip_marks_skipped_with_reason(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True)
+    github = FakeGitHub([_issue()])
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    devin._dry_sessions[session["session_id"]]["structured_output"] = {
+        "verdict": "SKIP", "issue_kind": "question", "skip_reason": "NOT_ENGINEERING",
+        "rationale": "Support question about configuring OAuth.",
+    }
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.SKIPPED.value
+    assert "NOT_ENGINEERING" in workflow["failure_reason"]
+    assert [s["role"] for s in store.get_sessions(workflow["id"])] == ["triage"]
+    asyncio.run(engine.tick())
+    assert [s["role"] for s in store.get_sessions(workflow["id"])] == ["triage"]
+
+
+def test_triage_needs_info_asks_then_reply_queues_investigation(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True)
+    github = FakeGitHub([_issue()])
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    devin._dry_sessions[session["session_id"]]["structured_output"] = {
+        "verdict": "NEEDS_INFO", "issue_kind": "unclear",
+        "clarification_question": "Which Superset version?",
+        "needs_info_kind": "NEEDS_REPORTER_INFO", "rationale": "No version given.",
+    }
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.NEEDS_INFO.value
+    github.comments[1].append({"id": 9, "body": "5.0", "user": {"login": "human"}})
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
+
+
+def test_intake_filters_skip_without_spending_devin(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True, ignore_labels=("question",),
+                        ignore_issue_types=("feature",))
+    issues = [_issue(1, labels=[{"name": "question"}]),
+              _issue(2, type={"name": "Feature"}),
+              _issue(3)]
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, FakeGitHub(issues), DevinClient(""))
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.SKIPPED.value
+    assert store.get_workflow("owner/repo", 2)["state"] == State.SKIPPED.value
+    assert store.get_workflow("owner/repo", 3)["state"] == State.TRIAGING.value
+    assert store.count_active_sessions() == 1
+
+
+def test_max_new_issues_per_poll(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True, max_new_issues_per_poll=2,
+                         max_concurrent_devins=10)
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue(i) for i in range(1, 6)]),
+                            DevinClient(""))
+    asyncio.run(engine.tick())
+    assert len(store.list_workflows()) == 2
+    asyncio.run(engine.tick())
+    assert len(store.list_workflows()) == 4
+
+
+def test_lookback_limit_skips_old_issues(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True, issue_lookback_days=30)
+    old = _issue(1, created_at="2020-01-01T00:00:00+00:00")
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, FakeGitHub([old]), DevinClient(""))
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.SKIPPED.value
+    assert "lookback" in workflow["failure_reason"]
+    assert store.count_active_sessions() == 0
 
 
 def test_concurrency_cap(tmp_path):

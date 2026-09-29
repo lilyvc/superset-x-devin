@@ -11,8 +11,9 @@
   <button id="poll">Poll now</button>
 </header>
 <main>
-  <div class="grid g6">
-    <div class="card kpi"><h2>Backlog</h2><div class="v" id="k-backlog">–</div><div class="d">eligible, not started</div></div>
+  <div class="grid g7">
+    <div class="card kpi"><h2>Discovered</h2><div class="v" id="k-discovered">–</div><div class="d" id="k-triaging">–</div></div>
+    <div class="card kpi"><h2>Queued</h2><div class="v" id="k-backlog">–</div><div class="d" id="k-skipped">–</div></div>
     <div class="card kpi"><h2>Active</h2><div class="v" id="k-active">–</div><div class="d" id="k-util">–</div></div>
     <div class="card kpi"><h2>Waiting for human</h2><div class="v" id="k-waiting">–</div><div class="d">clarification / blocked</div></div>
     <div class="card kpi"><h2>PRs ready</h2><div class="v" id="k-prs">–</div><div class="d">verified, awaiting review</div></div>
@@ -38,8 +39,8 @@
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const ORDER=['QUEUED','TRIAGING','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','READY_FOR_REVIEW','COMPLETED','NOT_REPRODUCIBLE','BLOCKED','FAILED','ESCALATED','DISCOVERED'];
-const LANES=[['Queued',['DISCOVERED','QUEUED']],['Investigating',['TRIAGING','INVESTIGATING']],['Waiting for human',['NEEDS_INFO','BLOCKED']],['Root cause found',['REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR ready',['PR_OPENED','READY_FOR_REVIEW']],['Completed',['COMPLETED']],['Closed out',['NOT_REPRODUCIBLE','FAILED','ESCALATED']]];
+const ORDER=['QUEUED','DISCOVERED','TRIAGING','SKIPPED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','READY_FOR_REVIEW','COMPLETED','NOT_REPRODUCIBLE','BLOCKED','FAILED','ESCALATED'];
+const LANES=[['Discovered',['DISCOVERED']],['Triaging',['TRIAGING']],['Queued',['QUEUED']],['Investigating',['INVESTIGATING']],['Waiting for human',['NEEDS_INFO','BLOCKED']],['Root cause found',['REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR ready',['PR_OPENED','READY_FOR_REVIEW']],['Completed',['COMPLETED']],['Skipped by triage',['SKIPPED']],['Closed out',['NOT_REPRODUCIBLE','FAILED','ESCALATED']]];
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}
 function ago(iso){return iso?dur((Date.now()-new Date(iso))/1000):'–'}
 function stageStart(w){return w.waiting_since||w.pr_opened_at||w.remediation_started_at||w.root_cause_at||w.reproduced_at||w.started_at||w.discovered_at}
@@ -48,7 +49,9 @@ async function load(){
   const [m,ws,h]=await Promise.all([fetch('/api/metrics').then(r=>r.json()),fetch('/api/workflows').then(r=>r.json()),fetch('/healthz').then(r=>r.json())]);
   repo=h.target_repo;$('#repo').textContent=repo+(h.dry_run?' · DRY RUN':'');
   const g=m.groups;
-  $('#k-backlog').textContent=g.backlog;$('#k-active').textContent=g.active;
+  $('#k-discovered').textContent=g.discovered;$('#k-triaging').textContent=`${g.triaging} triaging now`;
+  $('#k-backlog').textContent=m.counts.QUEUED;$('#k-skipped').textContent=`${g.skipped} skipped by triage`;
+  $('#k-active').textContent=g.active;
   $('#k-util').textContent=`${m.active_sessions}/${m.max_concurrent} Devin sessions (${Math.round(m.utilization*100)}%)`;
   $('#k-waiting').textContent=g.waiting_for_human;$('#k-prs').textContent=g.prs_ready;$('#k-done').textContent=g.completed;
   $('#k-notrepro').textContent=`${g.not_reproducible} not reproducible`;$('#k-failed').textContent=g.blocked_failed;
@@ -57,6 +60,7 @@ async function load(){
   $('#funnel').innerHTML=Object.entries(m.funnel).map(([k,v])=>`<div class="row"><span>${esc(k)}</span><div class="bar"><i style="width:${v/max*100}%"></i></div><b>${v}</b></div>`).join('');
   const md=m.medians,r=m.rates,t=m.throughput;
   $('#delivery').innerHTML=[
+    ['Median discovered → triage start',dur(md.discovered_to_triage_start)],
     ['Median discovered → investigation start',dur(md.discovered_to_investigation_start)],
     ['Median discovered → reproduced',dur(md.discovered_to_reproduced)],
     ['Median discovered → root cause',dur(md.discovered_to_root_cause)],
@@ -65,6 +69,7 @@ async function load(){
     ['Reproduction rate',Math.round(r.reproduction_rate*100)+'%'],
     ['Verified-fix rate',Math.round(r.verified_fix_rate*100)+'%'],
     ['Needs-info rate',Math.round(r.needs_info_rate*100)+'%'],
+    ['Triage skip rate',Math.round(r.triage_skip_rate*100)+'%'],
     ['ACUs per completed PR',m.acus_per_completed_pr.toFixed(1)],
   ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
   ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
@@ -73,7 +78,7 @@ async function load(){
     const sess=w.sessions.map(s=>`<a class="mono" href="${esc(s.url)}" target="_blank" title="${esc(s.status||'')}">${esc(s.role)}${s.acus?` · ${(+s.acus).toFixed(1)}`:''}</a>`).join('<br>');
     const waiting=w.waiting_for_seconds!=null?` <span class="muted small">waiting ${dur(w.waiting_for_seconds)}</span>`:'';
     return `<tr><td><a href="${href}"><b>#${n}</b></a> <span class="muted small">${esc(w.title||'')}</span></td><td><span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>${waiting}</td><td class="muted">${ago(stageStart(w))}</td><td>${sess||'<span class="muted">–</span>'}</td><td>${w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()}</a>`:'<span class="muted">–</span>'}</td></tr>`;
-  }).join('')||'<tr><td colspan="5" class="muted">No eligible issues yet. Label an issue in the target repo and click “Poll now”.</td></tr>';
+  }).join('')||'<tr><td colspan="5" class="muted">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</td></tr>';
   $('#lanes').innerHTML=LANES.map(([name,states])=>{const items=ws.filter(w=>states.includes(w.state));return `<div class="lane"><h3>${name} <span class="muted">${items.length}</span></h3><div class="items">${items.map(w=>`<a class="chip" href="/issues/${w.issue_number}">#${w.issue_number} <span class="muted">${esc((w.title||'').slice(0,48))}</span></a>`).join('')||'<span class="muted small">—</span>'}</div></div>`}).join('');
   $('#updated').textContent='updated '+new Date().toLocaleTimeString();
 }

@@ -19,6 +19,83 @@ def _skill(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Triage (cheap intake gate — runs on every newly discovered issue)
+# ---------------------------------------------------------------------------
+
+TRIAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {
+            "type": "string",
+            "description": "One of: ACTIONABLE, NEEDS_INFO, SKIP.",
+        },
+        "issue_kind": {
+            "type": "string",
+            "description": "One of: bug, regression, feature_request, question, docs, "
+            "chore, duplicate, invalid, unclear.",
+        },
+        "skip_reason": {
+            "type": ["string", "null"],
+            "description": "When verdict is SKIP: NOT_ENGINEERING | DUPLICATE | INVALID | "
+            "FEATURE_REQUEST | UNSUITABLE.",
+        },
+        "duplicate_of": {"type": ["string", "null"]},
+        "clarification_question": {
+            "type": ["string", "null"],
+            "description": "When verdict is NEEDS_INFO: ONE concise question the reporter can answer.",
+        },
+        "needs_info_kind": {
+            "type": ["string", "null"],
+            "description": "NEEDS_REPORTER_INFO | NEEDS_PRODUCT_INPUT | NEEDS_DESIGN_INPUT | "
+            "NEEDS_ENVIRONMENT_INFO.",
+        },
+        "suspected_area": {
+            "type": "string",
+            "description": "Best guess at the affected area of Superset (e.g. explore, SQL Lab, "
+            "dashboard filters, db_engine_specs/bigquery). One short phrase.",
+        },
+        "rationale": {"type": "string", "description": "2-4 sentences justifying the verdict."},
+    },
+    "required": ["verdict", "issue_kind", "rationale"],
+}
+
+TRIAGE_PROMPT = """You are the TRIAGE step of an autonomous engineering remediation system for the
+Apache Superset fork `{repo}`. You are the cheap gate in front of expensive work.
+
+Decide ONLY whether this issue is worth a full investigation. Spend as little
+effort as possible: read the issue and its comments, and at most do a quick
+look at the repository (a grep or a file read) if it is needed to tell whether
+the report describes real engineering work. Do NOT reproduce the bug, do NOT
+modify code, do NOT open PRs, do NOT run test suites.
+
+## Issue #{number}: {title}
+Reporter: {author}
+Labels: {labels}
+URL: {url}
+
+{body}
+
+## Comments so far
+{comments}
+
+## Verdicts
+- ACTIONABLE — a concrete defect/regression in this codebase with enough
+  information that an engineer could start reproducing it now.
+- NEEDS_INFO — plausibly a real defect, but essential information is missing
+  (version, steps, which chart/filter, expected behavior). Put ONE concise,
+  answerable question in clarification_question and set needs_info_kind.
+  Never invent the missing details.
+- SKIP — not engineering work for this system: a support question, a feature
+  request or design discussion, an obvious duplicate (set duplicate_of), spam,
+  or otherwise unsuitable for autonomous remediation. Set skip_reason.
+
+Be decisive and honest: SKIP and NEEDS_INFO are good answers. An orchestrator
+reads your structured output and acts on it directly, so fill the fields
+truthfully, then finish the session.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Investigator
 # ---------------------------------------------------------------------------
 
@@ -296,6 +373,39 @@ def _bullets(items) -> str:
     if isinstance(items, str):
         return items
     return "\n".join(f"- {i}" for i in items)
+
+
+def triage_prompt(repo: str, issue: dict, comments: list[dict]) -> str:
+    labels = [
+        item if isinstance(item, str) else item.get("name", "")
+        for item in issue.get("labels") or []
+    ]
+    return TRIAGE_PROMPT.format(
+        repo=repo,
+        number=issue["number"],
+        title=issue.get("title", ""),
+        author=(issue.get("user") or {}).get("login", "unknown"),
+        labels=", ".join(labels) or "(none)",
+        url=issue.get("html_url", ""),
+        body=issue.get("body") or "(empty)",
+        comments=render_comments(comments),
+    )
+
+
+def skip_comment(reason: str | None, rationale: str, session_url: str) -> str:
+    label = {
+        "NOT_ENGINEERING": "not engineering work for this system",
+        "DUPLICATE": "a duplicate of existing work",
+        "FEATURE_REQUEST": "a feature request rather than a defect",
+        "INVALID": "not a valid defect report",
+        "UNSUITABLE": "unsuitable for autonomous remediation",
+    }.get(reason or "", "out of scope for autonomous remediation")
+    return (
+        f"**Skipped by automated triage** — this issue looks like {label} "
+        f"([triage session]({session_url})).\n\n{rationale}\n\n"
+        "_No Devin investigation was started. A maintainer can re-open this path by "
+        "commenting with the missing context or handling it manually._"
+    )
 
 
 def investigator_prompt(repo: str, issue: dict, comments: list[dict]) -> str:

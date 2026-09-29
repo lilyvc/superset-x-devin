@@ -12,7 +12,8 @@
   </div>
   <section class="grid g2">
     <div>
-      <div class="card"><h2>Investigation (Investigator Devin)</h2><div id="inv"></div></div>
+      <div class="card"><h2>Intake triage (Triage Devin)</h2><div id="tri"></div></div>
+      <div class="card" style="margin-top:12px"><h2>Investigation (Investigator Devin)</h2><div id="inv"></div></div>
       <div class="card" style="margin-top:12px"><h2>Remediation &amp; verification (Remediator Devin)</h2><div id="rem"></div></div>
       <div class="card" style="margin-top:12px"><h2>Engineering analysis (Analyst Devin)</h2><div id="ana"></div></div>
     </div>
@@ -23,8 +24,8 @@
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const link=s=>esc(s).replace(/(https?:\/\/[^\s)]+)/g,'<a href="$1" target="_blank">$1</a>');
-const STEPS=['QUEUED','INVESTIGATING','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','READY_FOR_REVIEW'];
-const BAD={NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1};
+const STEPS=['DISCOVERED','TRIAGING','QUEUED','INVESTIGATING','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','READY_FOR_REVIEW'];
+const BAD={NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1,SKIPPED:1};
 const number=location.pathname.split('/').pop();
 const fmt=iso=>iso?new Date(iso).toLocaleString():'–';
 const list=(a)=>Array.isArray(a)&&a.length?`<ul class="ev">${a.map(x=>`<li>${link(typeof x==='string'?x:JSON.stringify(x))}</li>`).join('')}</ul>`:'<span class="muted">–</span>';
@@ -35,10 +36,11 @@ async function load(){
   $('#title').textContent=`#${w.issue_number} ${w.title||''}`;
   $('#state').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>`;
   const reached=new Set(w.events.map(e=>e.to_state));reached.add(w.state);
-  $('#steps').innerHTML=STEPS.map(s=>`<div class="step ${s===w.state?'now':reached.has(s)?'done':''}">${s.replace(/_/g,' ')}</div>`).join('')+(BAD[w.state]||w.state==='NEEDS_INFO'||w.state==='COMPLETED'?`<div class="step ${BAD[w.state]?'bad':w.state==='COMPLETED'?'done':'now'}" style="grid-column:span 8">${w.state.replace(/_/g,' ')}${w.failure_reason?': '+esc(w.failure_reason):''}</div>`:'');
-  $('#issue').innerHTML=kv([['Repo',esc(w.repo)],['Issue',`<a href="${esc(w.issue_url)}" target="_blank">${esc(w.issue_url)}</a>`],['Author',esc(w.author)],['Labels',(w.labels||[]).map(l=>`<span class="pill">${esc(l)}</span>`).join(' ')],['Discovered',fmt(w.discovered_at)],['Investigation started',fmt(w.started_at)],['Reproduced',fmt(w.reproduced_at)],['Root cause',fmt(w.root_cause_at)],['Remediation started',fmt(w.remediation_started_at)],['PR opened',fmt(w.pr_opened_at)],['Completed',fmt(w.completed_at)]]);
+  $('#steps').innerHTML=STEPS.map(s=>`<div class="step ${s===w.state?'now':reached.has(s)?'done':''}">${s.replace(/_/g,' ')}</div>`).join('')+(BAD[w.state]||w.state==='NEEDS_INFO'||w.state==='COMPLETED'?`<div class="step ${BAD[w.state]?'bad':w.state==='COMPLETED'?'done':'now'}" style="grid-column:span 10">${w.state.replace(/_/g,' ')}${w.failure_reason?': '+esc(w.failure_reason):''}</div>`:'');
+  $('#issue').innerHTML=kv([['Repo',esc(w.repo)],['Issue',`<a href="${esc(w.issue_url)}" target="_blank">${esc(w.issue_url)}</a>`],['Author',esc(w.author)],['Labels',(w.labels||[]).map(l=>`<span class="pill">${esc(l)}</span>`).join(' ')],['Discovered',fmt(w.discovered_at)],['Triage started',fmt(w.triaged_started_at)],['Investigation started',fmt(w.started_at)],['Reproduced',fmt(w.reproduced_at)],['Root cause',fmt(w.root_cause_at)],['Remediation started',fmt(w.remediation_started_at)],['PR opened',fmt(w.pr_opened_at)],['Completed',fmt(w.completed_at)]]);
   $('#sessions').innerHTML=w.sessions.length?kv(w.sessions.map(s=>[esc(s.role),`<a href="${esc(s.url)}" target="_blank" class="mono">${esc(s.session_id)}</a><br><span class="muted small">${esc(s.devin_status||'')}${s.devin_status_detail?' · '+esc(s.devin_status_detail):''}${s.acus!=null?' · '+(+s.acus).toFixed(2)+' ACU':''}${s.active?' · <b>active</b>':''}</span>`])):'<span class="muted">none yet</span>';
-  const inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
+  const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
+  $('#tri').innerHTML=Object.keys(tri).length?kv([['Verdict',esc(tri.verdict)],['Issue kind',esc(tri.issue_kind)],['Suspected area',esc(tri.suspected_area||'–')],['Skip reason',esc(tri.skip_reason||'–')],['Duplicate of',esc(tri.duplicate_of||'–')],['Clarification question',esc(tri.clarification_question||'–')],['Rationale',esc(tri.rationale||'')]]):'<span class="muted">not yet available</span>';
   $('#outcome').innerHTML=kv([['PR',w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">${esc(w.pr_url)}</a>`:'–'],['Remediation attempts',w.remediation_attempts||0],['Needs-info kind',esc(w.needs_info_kind||'–')],['Waiting since',fmt(w.waiting_since)],['Failure / block reason',esc(w.failure_reason||'–')]]);
   $('#inv').innerHTML=Object.keys(inv).length?kv([['Status',esc(inv.status)],['Summary',esc(inv.summary)],['Expected',esc(inv.expected_behavior)],['Observed',esc(inv.observed_behavior)],['Reproduction steps',list(inv.reproduction_steps)],['Reproduction evidence',list(inv.reproduction_evidence)],['Root cause',`${esc(inv.root_cause)} <span class="muted">(${esc(inv.root_cause_confidence||'?')} confidence)</span>`],['Affected components',list(inv.affected_components)],['Verification plan',list(inv.verification_plan)],['Clarification question',esc(inv.clarification_question||'–')],['Missing information',list(inv.missing_information)]]):'<span class="muted">not yet available</span>';
   $('#rem').innerHTML=Object.keys(rem).length?kv([['Status',esc(rem.status)],['Fix',esc(rem.fix_summary||rem.summary)],['Files changed',list(rem.files_changed)],['Regression tests added',list(rem.regression_tests_added)],['Tests executed',Array.isArray(rem.tests_executed)&&rem.tests_executed.length?`<table class="small mono"><tbody>${rem.tests_executed.map(t=>`<tr><td>${esc(t.command)}</td><td><span class="pill ${t.result==='passed'?'COMPLETED':'FAILED'}">${esc(t.result)}</span></td></tr>`).join('')}</tbody></table>`:'–'],['Original reproduction re-run passed',rem.reproduction_rerun_passed?'yes':'no'],['Verification passed',rem.verification_passed?'yes':'no'],['Verification evidence',list(rem.verification_evidence)],['Blockers',list(rem.blockers)]]):'<span class="muted">not yet available</span>';

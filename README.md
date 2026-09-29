@@ -2,8 +2,9 @@
 
 Apache Superset has a backlog of actionable bug reports, and engineers spend
 time on triage, reproduction, and root-cause analysis before anyone can write a
-fix. This service turns eligible GitHub issues into verified pull requests,
-while a dashboard shows automation, blockers, and delivery speed.
+fix. This service autonomously discovers GitHub issues and turns the actionable
+ones into verified pull requests, while a dashboard shows automation, blockers,
+and delivery speed. Intake needs no human trigger label.
 
 It runs **externally** against a configurable `TARGET_REPO`. The target
 repository remains the home for issues, Devin work branches, and pull requests;
@@ -13,14 +14,18 @@ through their APIs.
 
 ## 1. Lifecycle
 
-An eligible issue is discovered by polling or an `issues` webhook, then moves
-through a deterministic Python-owned state machine:
+Every open issue in `TARGET_REPO` is discovered by polling (or an `issues`
+webhook), persisted as `DISCOVERED`, and put through a cheap Triage Devin that
+returns one of three verdicts. Actionable issues then move through a
+deterministic Python-owned state machine:
 
 ```text
-GitHub issue
+GitHub issue (no label required)
     |
     v
-DISCOVERED --> QUEUED --> TRIAGING --> INVESTIGATING
+DISCOVERED --> TRIAGING --+--> SKIPPED (not engineering / duplicate / invalid)
+                          +--> NEEDS_INFO --human reply--> QUEUED
+                          +--> QUEUED --> INVESTIGATING
                                       |       |
                                       |       +--> NEEDS_INFO --human reply-->
                                       |       |                       |
@@ -50,6 +55,25 @@ DISCOVERED --> QUEUED --> TRIAGING --> INVESTIGATING
                                                         v
                                                     COMPLETED
 ```
+
+### Autonomous intake
+
+| Triage verdict | State | Action on the issue |
+| --- | --- | --- |
+| `ACTIONABLE` | `QUEUED` | Investigator Devin starts on the next tick |
+| `NEEDS_INFO` | `NEEDS_INFO` | One concise clarification question is posted; a human reply queues investigation |
+| `SKIP` | `SKIPPED` | Comment explains the reason (`NOT_ENGINEERING`, `DUPLICATE`, `FEATURE_REQUEST`, `INVALID`, `UNSUITABLE`) |
+
+Deterministic filters run *before* any Devin session is created, so obviously
+unsuitable issues cost nothing: pull requests, `IGNORE_LABELS`,
+`IGNORE_ISSUE_TYPES`, issues older than `ISSUE_LOOKBACK_DAYS`, and anything
+beyond `MAX_NEW_ISSUES_PER_POLL` in a single poll. Filtered issues are persisted
+as `SKIPPED` with reason `FILTERED`, so they are never re-evaluated. Backlog
+issues that already exist are discovered the same way (`POLL_BACKLOG=true`).
+
+Opt-in gating is still available: set `ELIGIBILITY_LABEL=devin-remediate` and
+only labelled issues enter intake. Set `TRIAGE_ENABLED=false` to queue every
+admitted issue straight to the Investigator without a triage verdict.
 
 `NEEDS_INFO` is a waiting loop, not a failure; `BLOCKED` is the equivalent for
 remediation. A PR closed without merging becomes `FAILED`; a closed target
@@ -84,9 +108,20 @@ structured evidence; it does not directly choose workflow transitions.
 
 ## 3. Devin roles and success gates
 
-Three independent session roles keep investigation, implementation, and
+Four independent session roles keep intake, investigation, implementation, and
 follow-up analysis separate. The schemas in `app/prompts.py` are the contracts
 stored with each workflow.
+
+### Triage
+
+A deliberately cheap session (`TRIAGE_ACU_LIMIT`, default 2 ACUs) that reads the
+issue and its comments, may grep the repo, and must not reproduce the bug,
+modify code, run test suites, or open a PR. Its structured output is
+`verdict` (`ACTIONABLE` / `NEEDS_INFO` / `SKIP`), `issue_kind`, `skip_reason`,
+`duplicate_of`, `clarification_question`, `needs_info_kind`, `suspected_area`,
+and `rationale`. This is an intake routing decision, not a proof gate: Python
+maps the verdict onto `QUEUED`, `NEEDS_INFO`, or `SKIPPED` and comments on the
+issue for the latter two.
 
 ### Investigator
 
@@ -169,12 +204,17 @@ has no active session, the reply is not silently lost: the engine records a
 
 ## 6. Dashboard and APIs
 
-Open `/` for KPI cards (backlog, active, waiting, PRs, completion, failures,
-ACUs, utilization), a live workflow table with stage age/session/PR links, a
-funnel, delivery metrics, pipeline lanes, and a lock-guarded `Poll now` button.
+Open `/` for KPI cards (discovered/triaging, queued/skipped, active, waiting,
+PRs, completion, failures, ACUs, utilization), a live workflow table with stage
+age/session/PR links, an intake funnel (discovered → triaged → actionable →
+investigated → …), delivery metrics including triage skip rate and
+discovered→triage latency, and a lock-guarded `Poll now` button. Pipeline lanes
+distinguish `DISCOVERED`, `TRIAGING`, `QUEUED`, `INVESTIGATING`, waiting for
+human, remediation, PR ready, completed, and `SKIPPED`.
 
 Open `/issues/{n}` for lifecycle steps, issue metadata, Devin sessions,
-outcome, investigation/remediation/analysis outputs, and the event timeline.
+outcome, triage verdict, investigation/remediation/analysis outputs, and the
+event timeline.
 
 The JSON and operational endpoints are:
 
@@ -221,7 +261,7 @@ polling still needs read access, so set `GITHUB_TOKEN` for real issues:
 DRY_RUN=true \
 ENABLE_POLLING=true \
 POLL_BACKLOG=true \
-ELIGIBILITY_LABEL= \
+MAX_NEW_ISSUES_PER_POLL=5 \
 TARGET_REPO=lilyvc/superset \
 GITHUB_TOKEN="$GITHUB_TOKEN" \
 .venv/bin/uvicorn app.main:app --port 8000
@@ -234,9 +274,11 @@ In another terminal, seed an issue with a signed simulated webhook:
   --number 1 --title "Dashboard crashes on load"
 ```
 
-Run serialized ticks and open the dashboard:
+Run serialized ticks and open the dashboard (the first tick discovers and
+triages, the second starts the Investigator):
 
 ```bash
+curl -X POST http://localhost:8000/admin/poll-now
 curl -X POST http://localhost:8000/admin/poll-now
 curl -X POST http://localhost:8000/admin/poll-now
 curl -X POST http://localhost:8000/admin/poll-now
@@ -260,7 +302,13 @@ GitHub comment writes while keeping the same state-machine path.
 | `DRY_RUN` | `false` | Fake Devin sessions and log comments instead of external writes |
 | `POLL_INTERVAL_SECONDS` / `POLL_TIMEOUT_SECONDS` | `10` / `1800` | Legacy summary-orchestrator polling interval / timeout |
 | `MAX_ACU_LIMIT` | unset | Optional global cap applied to each created session |
-| `ELIGIBILITY_LABEL` | `devin-remediate` | Only issues with this label are eligible; empty means every open issue |
+| `ELIGIBILITY_LABEL` | empty | Empty means autonomous intake of every open issue; set a label to restrict intake to issues carrying it |
+| `TRIAGE_ENABLED` | `true` | Run the cheap Triage Devin before the Investigator |
+| `TRIAGE_ACU_LIMIT` | `2` | ACU cap for a triage session |
+| `MAX_NEW_ISSUES_PER_POLL` | `5` | Maximum newly discovered issues admitted per poll |
+| `ISSUE_LOOKBACK_DAYS` | unset | Skip issues created longer ago than this |
+| `IGNORE_LABELS` | `question,duplicate,invalid,wontfix,discussion,rfc,sip,devin-analysis` | Labels that skip intake without a Devin session |
+| `IGNORE_ISSUE_TYPES` | `feature,task,epic` | GitHub issue types that skip intake |
 | `MAX_CONCURRENT_DEVINS` | `3` | Maximum active Devin sessions across all roles |
 | `MAX_REMEDIATION_ATTEMPTS` | `2` | Maximum verification retries for a Remediator |
 | `ANALYSIS_ENABLED` | `true` | Dispatch the Analyst role after investigation |
@@ -269,16 +317,18 @@ GitHub comment writes while keeping the same state-machine path.
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose overrides it to `/data/orchestrator.db` |
 | `ENABLE_POLLING` | `false` | Start the GitHub poller and run a startup tick |
 | `GITHUB_POLL_INTERVAL_SECONDS` | `30` | GitHub discovery/comment polling interval |
-| `POLL_BACKLOG` | label-dependent | Include existing eligible open issues; otherwise baseline existing issues at startup |
+| `POLL_BACKLOG` | `true` | Discover the existing open-issue backlog; `false` baselines existing issues at startup |
 
 `DEVIN_ORG_ID` selects the org-scoped v3 API for PATs; service-user keys use v1.
 The client normalizes both response shapes.
 
 ## 8. Demo flow
 
-1. Label an actionable `TARGET_REPO` issue `devin-remediate`.
+1. Open an issue on `TARGET_REPO` — no label needed.
 2. Within `GITHUB_POLL_INTERVAL_SECONDS` (or after **Poll now**), the dashboard
-   shows `QUEUED` → `INVESTIGATING` and an Investigator session link.
+   shows `DISCOVERED` → `TRIAGING` → `QUEUED` → `INVESTIGATING` with the triage
+   verdict and session links (non-actionable issues land in `SKIPPED` or
+   `NEEDS_INFO` instead).
 3. Investigator Devin posts reproduction/root-cause evidence; the workflow
    enters `REMEDIATING`, and Remediator Devin opens a PR with tests.
 4. Python validates the contract, shows the PR/evidence in `READY_FOR_REVIEW`,

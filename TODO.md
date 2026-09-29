@@ -2,8 +2,8 @@
 
 The deterministic multi-stage workflow is implemented. The Python engine owns
 state transitions, persists workflows/sessions/events in SQLite, and uses
-Investigator, Remediator, and Analyst Devin sessions with structured-output
-gates.
+Triage, Investigator, Remediator, and Analyst Devin sessions with
+structured-output gates. Intake is autonomous: no trigger label is required.
 
 ## Completed
 
@@ -22,12 +22,20 @@ gates.
       cause, remediation, verification, PR reconciliation, and analyst
       follow-up are implemented with schemas, prompts, gates, comments, and
       tests; `app/workflow.py`, `app/prompts.py`, `tests/test_workflow.py`.
+- [x] **Autonomous intake** — every open issue is discovered, persisted as
+      `DISCOVERED`, deterministically filtered, and triaged by a cheap Devin
+      session that routes to `QUEUED`, `NEEDS_INFO`, or `SKIPPED` with a
+      reason; safety rails are `MAX_NEW_ISSUES_PER_POLL`,
+      `MAX_CONCURRENT_DEVINS`, `ISSUE_LOOKBACK_DAYS`, `IGNORE_LABELS`, and
+      `IGNORE_ISSUE_TYPES`; `app/workflow.py`, `app/config.py`.
 
 ## Remaining follow-ups
 
-- [ ] **Webhook parity for label events** — handle label-added/removed events
-      directly so eligibility changes can trigger discovery without waiting for
-      the next poll.
+- [ ] **Duplicate detection across issues** — give triage a persisted index of
+      prior workflows so `DUPLICATE` verdicts can cite the earlier issue
+      reliably instead of relying on a single session's search.
+- [ ] **Re-triage on issue edits** — re-evaluate `SKIPPED`/`NEEDS_INFO`
+      workflows when the reporter substantially edits the issue body.
 - [ ] **Dashboard authentication** — add an optional auth layer or integrate
       with the deployment's identity-aware proxy before exposing the dashboard
       publicly.

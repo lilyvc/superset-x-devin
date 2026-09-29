@@ -27,6 +27,9 @@ def metrics(store, settings) -> dict:
     states = {state.value: sum(r["state"] == state.value for r in rows) for state in State}
     active_values = {s.value for s in ACTIVE_STATES}
     groups = {
+        "discovered": states[State.DISCOVERED.value],
+        "triaging": states[State.TRIAGING.value],
+        "skipped": states[State.SKIPPED.value],
         "backlog": sum(r["state"] in {State.QUEUED.value, State.DISCOVERED.value} for r in rows),
         "active": sum(r["state"] in active_values for r in rows),
         "waiting_for_human": sum(r["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value} for r in rows),
@@ -39,8 +42,12 @@ def metrics(store, settings) -> dict:
         name: len(rows) if stage is None else sum(r["state"] in {s.value for s in stage} for r in rows)
         for name, stage in FUNNEL
     }
-    investigated = sum(r["state"] not in {State.DISCOVERED.value, State.QUEUED.value, State.TRIAGING.value}
-                       for r in rows)
+    triaged = sum(r["state"] not in {State.DISCOVERED.value, State.TRIAGING.value} for r in rows)
+    investigated = sum(
+        r["state"] not in {State.DISCOVERED.value, State.QUEUED.value, State.TRIAGING.value,
+                           State.SKIPPED.value}
+        for r in rows
+    )
     reproduced = sum(r["state"] in {s.value for s in {
         State.REPRODUCED, State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING,
         State.PR_OPENED, State.READY_FOR_REVIEW, State.COMPLETED,
@@ -65,8 +72,10 @@ def metrics(store, settings) -> dict:
             "needs_info_rate": states[State.NEEDS_INFO.value] / len(rows) if rows else 0,
             "verified_fix_rate": groups["prs_ready"] / reproduced if reproduced else 0,
             "failure_rate": groups["blocked_failed"] / len(rows) if rows else 0,
+            "triage_skip_rate": groups["skipped"] / triaged if triaged else 0,
         },
         "medians": {
+            "discovered_to_triage_start": _duration(rows, "triaged_started_at"),
             "discovered_to_investigation_start": _duration(rows, "started_at"),
             "discovered_to_reproduced": _duration(rows, "reproduced_at"),
             "discovered_to_root_cause": _duration(rows, "root_cause_at"),

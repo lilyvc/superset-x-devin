@@ -49,7 +49,12 @@ class DevinClient:
         if self._dry_run:
             session_id = f"dry-run-session-{next(self._dry_counter)}"
             role = next((tag.split(":", 1)[1] for tag in tags or [] if tag.startswith("role:")), "investigator")
-            if role == "investigator":
+            if role == "triage":
+                output = {
+                    "verdict": "ACTIONABLE", "issue_kind": "bug",
+                    "suspected_area": "dry-run", "rationale": "Dry-run triage verdict",
+                }
+            elif role == "investigator":
                 output = {
                     "status": "REPRODUCED", "enough_information": True, "reproduced": True,
                     "expected_behavior": "Expected behavior", "observed_behavior": "Observed behavior",

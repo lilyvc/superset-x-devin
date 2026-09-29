@@ -8,6 +8,7 @@ class State(str, Enum):
     DISCOVERED = "DISCOVERED"
     QUEUED = "QUEUED"
     TRIAGING = "TRIAGING"
+    SKIPPED = "SKIPPED"
     INVESTIGATING = "INVESTIGATING"
     NEEDS_INFO = "NEEDS_INFO"
     REPRODUCED = "REPRODUCED"
@@ -24,6 +25,7 @@ class State(str, Enum):
 
 
 TERMINAL_STATES = {
+    State.SKIPPED,
     State.COMPLETED,
     State.NOT_REPRODUCIBLE,
     State.FAILED,
@@ -42,6 +44,7 @@ WAITING_FOR_HUMAN_STATES = {State.NEEDS_INFO, State.BLOCKED}
 
 
 class Role(str, Enum):
+    TRIAGE = "triage"
     INVESTIGATOR = "investigator"
     REMEDIATOR = "remediator"
     ANALYST = "analyst"
@@ -54,10 +57,28 @@ class NeedsInfoKind(str, Enum):
     ENVIRONMENT = "NEEDS_ENVIRONMENT_INFO"
 
 
+# Reasons the triage step can reject an issue without spending investigation ACUs.
+class SkipReason(str, Enum):
+    NOT_ENGINEERING = "NOT_ENGINEERING"
+    DUPLICATE = "DUPLICATE"
+    INVALID = "INVALID"
+    FEATURE_REQUEST = "FEATURE_REQUEST"
+    UNSUITABLE = "UNSUITABLE"
+    FILTERED = "FILTERED"
+
+
 # Funnel stages, in order, for the dashboard. Each maps to the set of states
 # that count as "reached at least this far".
 FUNNEL = [
-    ("Eligible", None),
+    ("Discovered", None),
+    ("Triaged", {State.SKIPPED, State.QUEUED, State.NEEDS_INFO, State.INVESTIGATING, State.REPRODUCED,
+                 State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING, State.PR_OPENED,
+                 State.READY_FOR_REVIEW, State.COMPLETED, State.NOT_REPRODUCIBLE, State.BLOCKED,
+                 State.FAILED, State.ESCALATED}),
+    ("Actionable", {State.QUEUED, State.NEEDS_INFO, State.INVESTIGATING, State.REPRODUCED,
+                    State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING, State.PR_OPENED,
+                    State.READY_FOR_REVIEW, State.COMPLETED, State.NOT_REPRODUCIBLE, State.BLOCKED,
+                    State.FAILED, State.ESCALATED}),
     ("Investigated", {State.INVESTIGATING, State.NEEDS_INFO, State.REPRODUCED, State.ROOT_CAUSE_FOUND,
                       State.REMEDIATING, State.VERIFYING, State.PR_OPENED, State.READY_FOR_REVIEW,
                       State.COMPLETED, State.NOT_REPRODUCIBLE}),

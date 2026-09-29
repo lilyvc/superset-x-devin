@@ -14,12 +14,15 @@ from .prompts import (
     ANALYSIS_SCHEMA,
     INVESTIGATION_SCHEMA,
     REMEDIATION_SCHEMA,
+    TRIAGE_SCHEMA,
     analyst_prompt,
     clarification_comment,
     investigator_prompt,
     remediator_prompt,
+    skip_comment,
+    triage_prompt,
 )
-from .states import ACTIVE_STATES, TERMINAL_STATES, Role, State
+from .states import ACTIVE_STATES, TERMINAL_STATES, Role, SkipReason, State
 from .store import Store, utcnow
 
 logger = logging.getLogger("workflow")
@@ -76,6 +79,13 @@ def _labels(issue: dict) -> set[str]:
     }
 
 
+def _issue_type(issue: dict) -> str:
+    issue_type = issue.get("type")
+    if isinstance(issue_type, dict):
+        return (issue_type.get("name") or "").lower()
+    return (issue_type or "").lower() if isinstance(issue_type, str) else ""
+
+
 def _fingerprint(output: Any) -> str:
     return hashlib.sha256(json.dumps(output or {}, sort_keys=True).encode()).hexdigest()
 
@@ -128,17 +138,38 @@ class WorkflowEngine:
             logger.exception("dispatch failed")
             self.store.add_event(None, "error", detail=f"dispatch: {exc}")
 
+    def _intake_filter(self, issue: dict) -> str | None:
+        """Cheap deterministic pre-filter; returns a skip reason detail or None."""
+        settings = self.settings
+        if settings.eligibility_label and settings.eligibility_label not in _labels(issue):
+            return f"missing eligibility label {settings.eligibility_label}"
+        ignored = {label.lower() for label in _labels(issue)} & set(settings.ignore_labels)
+        if ignored:
+            return f"ignored label(s): {', '.join(sorted(ignored))}"
+        issue_type = _issue_type(issue)
+        if issue_type and issue_type in settings.ignore_issue_types:
+            return f"ignored issue type: {issue_type}"
+        if settings.issue_lookback_days is not None:
+            created = _parse_dt(issue.get("created_at"))
+            if created and (_now_ts() - created).days > settings.issue_lookback_days:
+                return f"older than lookback of {settings.issue_lookback_days} days"
+        return None
+
     async def _discover(self, issues: list[dict]) -> None:
         numbers = {i.get("number") for i in issues}
         if self._startup_baseline is None:
             self._startup_baseline = max(numbers or {0})
+        admitted = 0
         for issue in issues:
-            if self.settings.eligibility_label and self.settings.eligibility_label not in _labels(issue):
+            if "pull_request" in issue:
                 continue
             if not self.settings.poll_backlog and issue["number"] <= self._startup_baseline:
                 continue
             if self.store.get_workflow(self.settings.target_repo, issue["number"]):
                 continue
+            if admitted >= self.settings.max_new_issues_per_poll:
+                break
+            admitted += 1
             workflow = self.store.upsert_workflow(
                 self.settings.target_repo, issue["number"], title=issue.get("title", ""),
                 issue_url=issue.get("html_url", ""),
@@ -146,7 +177,15 @@ class WorkflowEngine:
                 labels=list(_labels(issue)), state=State.DISCOVERED.value,
                 discovered_at=utcnow(),
             )
-            self.store.set_state(workflow["id"], State.QUEUED)
+            filtered = self._intake_filter(issue)
+            if filtered:
+                self.store.set_state(
+                    workflow["id"], State.SKIPPED,
+                    needs_info_kind=SkipReason.FILTERED.value,
+                    failure_reason=filtered, completed_at=utcnow(),
+                )
+            elif not self.settings.triage_enabled:
+                self.store.set_state(workflow["id"], State.QUEUED)
 
         open_ids = {i["number"] for i in issues}
         for workflow in self.store.list_workflows():
@@ -222,12 +261,52 @@ class WorkflowEngine:
         if not workflow:
             return
         role = row["role"]
-        if role == Role.INVESTIGATOR.value:
+        if role == Role.TRIAGE.value:
+            await self._handle_triage(row, workflow, output, detail, fp)
+        elif role == Role.INVESTIGATOR.value:
             await self._handle_investigator(row, workflow, output, status, detail, fp)
         elif role == Role.REMEDIATOR.value:
             await self._handle_remediator(row, workflow, output, status, detail, fp, pulls)
         elif role == Role.ANALYST.value:
             await self._handle_analyst(row, workflow, output, fp)
+
+    async def _handle_triage(self, row, workflow, out, session_kind, fp):
+        """Cheap intake verdict: queue for investigation, ask the reporter, or skip."""
+        self.store.set_state(workflow["id"], workflow["state"], triage=out)
+        finish = {"active": 0, "finished_at": utcnow(), "acted_fingerprint": fp}
+        if not out:
+            # No verdict: fall through to investigation rather than dropping the issue.
+            self.store.set_state(
+                workflow["id"], State.QUEUED,
+                failure_reason=f"triage produced no verdict ({session_kind}); queued anyway",
+            )
+            self.store.update_session(row["session_id"], **finish)
+            return
+        verdict = (out.get("verdict") or "").upper()
+        rationale = out.get("rationale") or ""
+        if verdict == "SKIP":
+            reason = out.get("skip_reason") or SkipReason.UNSUITABLE.value
+            detail = f"{reason}: {rationale}"
+            if out.get("duplicate_of"):
+                detail += f" (duplicate of {out['duplicate_of']})"
+            self.store.set_state(workflow["id"], State.SKIPPED, needs_info_kind=reason,
+                                 failure_reason=detail, completed_at=utcnow(), triage=out)
+            await self._comment(workflow, skip_comment(reason, rationale, row.get("url", "")))
+        elif verdict == "NEEDS_INFO":
+            question = out.get("clarification_question") or (
+                "Could you add the missing details (Superset version, exact steps, and what you "
+                "expected to happen)?"
+            )
+            self.store.set_state(workflow["id"], State.NEEDS_INFO,
+                                 needs_info_kind=out.get("needs_info_kind"),
+                                 waiting_since=utcnow(), triage=out)
+            await self._comment(
+                workflow,
+                clarification_comment(question, out.get("needs_info_kind"), row.get("url", "")),
+            )
+        else:
+            self.store.set_state(workflow["id"], State.QUEUED, triage=out)
+        self.store.update_session(row["session_id"], **finish)
 
     async def _handle_investigator(self, row, workflow, out, status, session_kind, fp):
         self.store.set_state(workflow["id"], workflow["state"], investigation=out)
@@ -411,7 +490,15 @@ class WorkflowEngine:
                     self.store.set_state(workflow["id"], State.INVESTIGATING if
                                          workflow["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value}
                                          else workflow["state"], waiting_since=None)
-                elif workflow["state"] == State.BLOCKED.value:
+                elif workflow["state"] == State.NEEDS_INFO.value:
+                    # Clarification was asked by the (now finished) triage session: the
+                    # reply is on the issue, so queue a fresh investigation that reads it.
+                    self.store.set_state(workflow["id"], State.QUEUED, waiting_since=None)
+                    self.store.add_event(
+                        workflow["id"], "human_reply_queued_investigation",
+                        detail={"comment_id": comment["id"]},
+                    )
+                else:
                     self.store.add_event(
                         workflow["id"], "human_comment_unforwarded",
                         detail={"comment_id": comment["id"], "reason": "no active session"},
@@ -450,16 +537,32 @@ class WorkflowEngine:
             if workflow["state"] == State.QUEUED.value and not self.store.get_sessions(
                 workflow["id"], Role.INVESTIGATOR, active_only=True
             ):
-                self.store.set_state(workflow["id"], State.TRIAGING, started_at=utcnow())
-                self.store.set_state(workflow["id"], State.INVESTIGATING)
+                self.store.set_state(workflow["id"], State.INVESTIGATING, started_at=utcnow())
                 await self._create_role_session(workflow, Role.INVESTIGATOR)
+                capacity -= 1
+        if not self.settings.triage_enabled:
+            return
+        for workflow in workflows:
+            if capacity <= 0:
+                break
+            if workflow["state"] == State.DISCOVERED.value and not self.store.get_sessions(
+                workflow["id"], Role.TRIAGE, active_only=True
+            ):
+                self.store.set_state(workflow["id"], State.TRIAGING, triaged_started_at=utcnow())
+                await self._create_role_session(workflow, Role.TRIAGE)
                 capacity -= 1
 
     async def _create_role_session(self, workflow: dict, role: Role):
         issue = await self.github.get_issue(workflow["repo"], workflow["issue_number"])
         comments = await self.github.list_issue_comments(workflow["repo"], workflow["issue_number"])
         inv = workflow.get("investigation") or {}
-        if role == Role.INVESTIGATOR:
+        if role == Role.TRIAGE:
+            prompt, schema, limit = (
+                triage_prompt(workflow["repo"], issue, comments),
+                TRIAGE_SCHEMA,
+                self.settings.triage_acu_limit,
+            )
+        elif role == Role.INVESTIGATOR:
             prompt, schema, limit = investigator_prompt(workflow["repo"], issue, comments), INVESTIGATION_SCHEMA, self.settings.investigator_acu_limit
         elif role == Role.REMEDIATOR:
             investigator = next(iter(self.store.get_sessions(workflow["id"], Role.INVESTIGATOR)), {})
@@ -512,14 +615,18 @@ class WorkflowEngine:
         repo = (payload.get("repository") or {}).get("full_name", self.settings.target_repo)
         if repo != self.settings.target_repo or "pull_request" in issue:
             return {"handled": False, "reason": "ineligible repository or pull request"}
-        if self.settings.eligibility_label and self.settings.eligibility_label not in _labels(issue):
-            return {"handled": False, "reason": "not eligible"}
         workflow = self.store.get_workflow(repo, issue["number"]) or self.store.upsert_workflow(
             repo, issue["number"], title=issue.get("title", ""), issue_url=issue.get("html_url", ""),
             author=(issue.get("user") or {}).get("login", ""), labels=list(_labels(issue)),
-            state=State.QUEUED.value, discovered_at=utcnow(),
+            state=State.DISCOVERED.value, discovered_at=utcnow(),
         )
-        if workflow["state"] == State.DISCOVERED.value:
+        filtered = self._intake_filter(issue)
+        if filtered:
+            self.store.set_state(workflow["id"], State.SKIPPED,
+                                 needs_info_kind=SkipReason.FILTERED.value,
+                                 failure_reason=filtered, completed_at=utcnow())
+            return {"handled": False, "reason": filtered}
+        if not self.settings.triage_enabled and workflow["state"] == State.DISCOVERED.value:
             self.store.set_state(workflow["id"], State.QUEUED)
         await self.tick()
         return {"handled": True, "workflow_id": workflow["id"]}

@@ -37,7 +37,31 @@ class Settings:
     # Optional label applied to issues once a Devin session has been dispatched.
     remediation_label: str = os.getenv("REMEDIATION_LABEL", "")
 
-    eligibility_label: str = os.getenv("ELIGIBILITY_LABEL", "devin-remediate")
+    # Intake is autonomous by default: every open issue is discovered and
+    # triaged. Setting a label restricts intake to issues carrying it.
+    eligibility_label: str = os.getenv("ELIGIBILITY_LABEL", "")
+    # Safety rails for autonomous intake.
+    max_new_issues_per_poll: int = int(os.getenv("MAX_NEW_ISSUES_PER_POLL", "5"))
+    issue_lookback_days: int | None = (
+        int(os.getenv("ISSUE_LOOKBACK_DAYS")) if os.getenv("ISSUE_LOOKBACK_DAYS") else None
+    )
+    ignore_labels: tuple[str, ...] = tuple(
+        label.strip().lower()
+        for label in os.getenv(
+            "IGNORE_LABELS",
+            "question,duplicate,invalid,wontfix,discussion,rfc,sip,devin-analysis",
+        ).split(",")
+        if label.strip()
+    )
+    # GitHub issue types (Projects "type" field) that are never intake candidates.
+    ignore_issue_types: tuple[str, ...] = tuple(
+        item.strip().lower()
+        for item in os.getenv("IGNORE_ISSUE_TYPES", "feature,task,epic").split(",")
+        if item.strip()
+    )
+    triage_enabled: bool = _env_bool("TRIAGE_ENABLED", True)
+    triage_acu_limit: int = int(os.getenv("TRIAGE_ACU_LIMIT", "2"))
+
     max_concurrent_devins: int = int(os.getenv("MAX_CONCURRENT_DEVINS", "3"))
     max_remediation_attempts: int = int(os.getenv("MAX_REMEDIATION_ATTEMPTS", "2"))
     analysis_enabled: bool = _env_bool("ANALYSIS_ENABLED", True)
@@ -54,10 +78,8 @@ class Settings:
         os.getenv("GITHUB_POLL_INTERVAL_SECONDS", "30")
     )
     # When false, issues that already exist at startup are baselined (not
-    # dispatched); when true the open-issues backlog is dispatched too.
-    poll_backlog: bool = _env_bool(
-        "POLL_BACKLOG", bool(os.getenv("ELIGIBILITY_LABEL", "devin-remediate"))
-    )
+    # dispatched); when true the open-issues backlog is discovered too.
+    poll_backlog: bool = _env_bool("POLL_BACKLOG", True)
 
     @property
     def devin_use_v3(self) -> bool:

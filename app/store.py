@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-JSON_WORKFLOW_FIELDS = {"labels", "investigation", "remediation", "analysis"}
+JSON_WORKFLOW_FIELDS = {"labels", "triage", "investigation", "remediation", "analysis"}
 JSON_SESSION_FIELDS = {"structured_output", "pull_requests"}
 
 
@@ -68,8 +68,9 @@ class Store:
                     state TEXT NOT NULL, needs_info_kind TEXT,
                     attempt INTEGER DEFAULT 0, remediation_attempts INTEGER DEFAULT 0,
                     pr_url TEXT, pr_number INTEGER, failure_reason TEXT,
-                    investigation TEXT, remediation TEXT, analysis TEXT,
+                    triage TEXT, investigation TEXT, remediation TEXT, analysis TEXT,
                     last_comment_id INTEGER DEFAULT 0, discovered_at TEXT,
+                    triaged_started_at TEXT,
                     started_at TEXT, investigated_at TEXT, reproduced_at TEXT,
                     root_cause_at TEXT, remediation_started_at TEXT,
                     pr_opened_at TEXT, completed_at TEXT, waiting_since TEXT,
@@ -96,6 +97,7 @@ class Store:
             })
             self._ensure_columns(conn, "workflows", {
                 "updated_at": "TEXT", "last_comment_id": "INTEGER DEFAULT 0",
+                "triage": "TEXT", "triaged_started_at": "TEXT",
             })
 
     @staticmethod
