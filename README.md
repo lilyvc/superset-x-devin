@@ -1,163 +1,350 @@
-# superset-x-devin
+# Autonomous Devin engineering remediation for Apache Superset
 
-Event-driven automation that orchestrates [Devin](https://devin.ai) sessions from GitHub
-issue events. It runs **externally** — it watches a configurable target repository via
-webhooks and never installs code into that repo.
+Apache Superset has a backlog of actionable bug reports, and engineers spend
+time on triage, reproduction, and root-cause analysis before anyone can write a
+fix. This service turns eligible GitHub issues into verified pull requests,
+while a dashboard shows automation, blockers, and delivery speed.
 
+It runs **externally** against a configurable `TARGET_REPO`. The target
+repository remains the home for issues, Devin work branches, and pull requests;
+this service does not install an application, agent, or source tree into it.
+The service stores orchestration state in SQLite and talks to GitHub and Devin
+through their APIs.
+
+## 1. Lifecycle
+
+An eligible issue is discovered by polling or an `issues` webhook, then moves
+through a deterministic Python-owned state machine:
+
+```text
+GitHub issue
+    |
+    v
+DISCOVERED --> QUEUED --> TRIAGING --> INVESTIGATING
+                                      |       |
+                                      |       +--> NEEDS_INFO --human reply-->
+                                      |       |                       |
+                                      |       +<----------------------+
+                                      |
+                                      +--> NOT_REPRODUCIBLE
+                                      +--> BLOCKED
+                                      +--> FAILED / ESCALATED
+                                      |
+                                      v
+                                 REPRODUCED
+                                      |
+                                      v
+                              ROOT_CAUSE_FOUND
+                                      |
+                                      +--> REMEDIATING --> VERIFYING
+                                                        |       |
+                                                        |       +--> FAILED
+                                                        |
+                                                        v
+                                                    PR_OPENED
+                                                        |
+                                                        v
+                                                 READY_FOR_REVIEW
+                                                        |
+                                  merged PR / closed issue
+                                                        v
+                                                    COMPLETED
 ```
-GitHub webhook (issues / issue_comment)
-        |
-        v
-  FastAPI endpoint  --verify signature-->  Orchestrator
-        |                                     |
-        |                                     |-- Devin API: create session / send message / poll
-        |                                     |-- SQLite: delivery dedup + issue -> session map
-        v                                     |
-   202 response <-----------------------------+
-                                              v
-                                GitHub API: post comment / add label
+
+`NEEDS_INFO` is a waiting loop, not a failure; `BLOCKED` is the equivalent for
+remediation. A PR closed without merging becomes `FAILED`; a closed target
+issue in `PR_OPENED` or `READY_FOR_REVIEW` becomes `COMPLETED`.
+
+## 2. Architecture
+
+```text
+                         +----------------------+
+                         |  Dashboard / JSON API |
+                         +----------+-----------+
+                                    |
+                                    v
++----------------+       +---------+------------------+       +----------------------+
+| GitHub issues  | <----> | Poller + Workflow Engine  | <----> | Devin API sessions   |
+| comments, PRs  |       | Python + SQLite            |       | Investigator         |
++----------------+       +----------------------------+       | Remediator / Analyst |
+                                                              +----------------------+
 ```
 
-**Current behaviour (v1)**
+The control plane owns decisions. Devin supplies engineering work and
+structured evidence; it does not directly choose workflow transitions.
 
-| GitHub event | What happens |
+| Deterministic control plane (Python) | Agentic engineering plane (Devin) |
 |---|---|
-| `issues.opened` / `issues.reopened` | A Devin session is created to summarize the issue; the summary is posted back as an issue comment. |
-| `issue_comment.created` | If the issue already has a Devin session on record, the comment is forwarded into that session — this is how a human reply to Devin's question resumes the workflow. |
+| Polling, webhooks, eligibility, and comment cursors | Interpret issues and decide when clarification is needed |
+| Issue/session/PR linkage and deduplication | Navigate Superset and reproduce backend, API, or UI behavior |
+| State machine, events, SQLite, and restart reconciliation | Debug and identify the root cause |
+| Concurrency limits, dispatch ordering, and API calls | Implement the smallest fix and add regression tests |
+| Timestamps, metrics, dashboard APIs, and structured gates | Run verification, iterate, and provide behavioral proof |
+| Human-comment forwarding and role linkage | Work in separate Investigator, Remediator, and Analyst sessions |
 
-Roadmap items (dispatch idempotency, remediation workflow, labels) live in [TODO.md](TODO.md).
+## 3. Devin roles and success gates
 
-## Prerequisites
+Three independent session roles keep investigation, implementation, and
+follow-up analysis separate. The schemas in `app/prompts.py` are the contracts
+stored with each workflow.
 
-- Python 3.12+ or Docker
-- A **Devin API credential** — either a service-user API key or a personal access
-  token (PAT), both created in the Devin web app under **Settings → Devin API**.
-  PATs also need `DEVIN_ORG_ID` (they use the org-scoped v3 API).
-- A **GitHub token** with `issues: write` on the target repo (a fine-grained PAT scoped to the repo works)
-- A **webhook secret** — any random string, e.g. `openssl rand -hex 32`
+### Investigator
 
-## Configuration
+The Investigator does not modify product source or open a PR. Its structured
+output includes `status` (`REPRODUCED`, `NOT_REPRODUCIBLE`, `NEEDS_INFO`, or
+`BLOCKED`), `enough_information`, `reproduced`, expected/observed behavior,
+reproduction steps/evidence, root cause/confidence, affected components,
+verification plan, suggested tests, missing information, clarification
+question, needs-info kind, product/design-input flags, and `summary`.
 
-Copy `.env.example` to `.env` and fill it in. Everything is env-driven so the same
-deployment can be pointed at a different repo by changing `TARGET_REPO` plus the
-token — no code changes needed.
+Python's `investigation_gate` accepts only when all of these exact conditions
+hold:
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `TARGET_REPO` | yes | `owner/name` to watch, e.g. `lilyvc/superset` |
-| `DEVIN_API_KEY` | yes* | Devin API credential — service-user key or PAT (`*`not needed with `DRY_RUN=true`) |
-| `DEVIN_ORG_ID` | with PAT | `org-...` id; selects the org-scoped v3 API. Leave empty for service-user keys (v1) |
-| `GITHUB_TOKEN` | yes* | Token with issues write on the target repo |
-| `GITHUB_WEBHOOK_SECRET` | recommended | Must match the webhook's secret; requests without a valid `X-Hub-Signature-256` are rejected |
-| `DRY_RUN` | no | `true` = run the whole pipeline with no external calls (comments are logged) |
-| `DEVIN_API_BASE_URL` | no | Defaults to `https://api.devin.ai` |
-| `POLL_INTERVAL_SECONDS` / `POLL_TIMEOUT_SECONDS` | no | Devin session polling cadence (10s / 30min defaults) |
-| `MAX_ACU_LIMIT` | no | Cap ACUs per spawned Devin session |
-| `ELIGIBILITY_LABEL` | no | Label required for discovery (default `devin-remediate`; empty means every open issue) |
-| `MAX_CONCURRENT_DEVINS` | no | Maximum number of active Devin sessions (default 3) |
-| `MAX_REMEDIATION_ATTEMPTS` | no | Verification iterations per remediation (default 2) |
-| `ANALYSIS_ENABLED` | no | Dispatch engineering analysis sessions (default true) |
-| `INVESTIGATOR_ACU_LIMIT` / `REMEDIATOR_ACU_LIMIT` / `ANALYST_ACU_LIMIT` | no | Per-role ACU limits (10 / 25 / 8) |
-| `REMEDIATION_LABEL` | no | Label applied to an issue when dispatched, e.g. `devin-remediation-started` |
-| `DB_PATH` | no | SQLite path (default `orchestrator.db`; `/data` under compose) |
-| `ENABLE_POLLING` | no | `true` = poll GitHub for new issues/comments instead of needing a webhook |
-| `GITHUB_POLL_INTERVAL_SECONDS` | no | Poll cadence (default 30) |
-| `POLL_BACKLOG` | no | `true` = also dispatch issues that existed before startup (default: baseline, only new issues) |
+1. `status == "REPRODUCED"`, `enough_information is True`, and `reproduced is True`.
+2. `expected_behavior`, `observed_behavior`, and `root_cause` are non-empty strings.
+3. `reproduction_steps`, `reproduction_evidence`, and `verification_plan` each
+   contain at least one item.
 
-## Run
+Passing moves the workflow through `REPRODUCED` and `ROOT_CAUSE_FOUND`.
+`NOT_REPRODUCIBLE`, `BLOCKED`, missing information, and repeated incomplete
+evidence take their respective controlled paths.
 
-### Docker
+### Remediator
+
+The Remediator receives the investigation and verification plan. Its output
+includes `status` (`PR_OPENED`, `VERIFICATION_FAILED`, `BLOCKED`, or `FAILED`),
+PR/branch/fix details, changed files, regression tests, `tests_executed`
+(`command`, `result`, optional `notes`), reproduction rerun and verification
+booleans, verification evidence, blockers, and `summary`.
+
+Python's `verification_gate` accepts only when:
+
+1. `status == "PR_OPENED"`, `verification_passed` is true, and
+   `reproduction_rerun_passed` is true.
+2. `tests_executed` is non-empty and every result is `"passed"`.
+3. A PR URL is present, either in `pr_url` or the session's `pull_requests`.
+
+Passing moves through `PR_OPENED` to `READY_FOR_REVIEW`. Failed verification
+can be sent back to the same session for another attempt, up to
+`MAX_REMEDIATION_ATTEMPTS`; exhausting attempts enters `FAILED`.
+
+### Analyst
+
+The Analyst does not change workflow state or modify the fix. Its contract
+captures `similar_code_locations`, `related_issues`, `systemic_risk`,
+`missing_engineering_practice`, `recommended_followup`, `followup_type`,
+optional `followup_issue_url`, and `summary`.
+
+Analysis is dispatched when `ANALYSIS_ENABLED=true` and is shown with the
+investigation and remediation outputs.
+
+**A session completing is not success. A PR existing is not verification.**
+The Python gates decide whether evidence is sufficient to move the workflow.
+
+## 4. Human clarification flow
+
+When an Investigator returns `NEEDS_INFO`, or asks a question in Devin chat
+without filling the contract, the engine stores the state and kind, posts one
+precise issue question with the session link, records `waiting_since`, and
+shows the duration on the dashboard. It polls comments after the persisted
+`last_comment_id`, ignores bot and automation comments, forwards the human
+reply into the **same** Investigator session, clears the wait, and resumes.
+
+The same pattern applies to a waiting Remediator, except its workflow state is
+`BLOCKED` until the active session receives the answer. If a blocked workflow
+has no active session, the reply is not silently lost: the engine records a
+`human_comment_unforwarded` event and leaves the state unchanged.
+
+## 5. Idempotency, concurrency, and restart safety
+
+- `MAX_CONCURRENT_DEVINS` caps active Investigator, Remediator, and Analyst
+  sessions together; the default is `3`.
+- Persisted role sessions gate dispatch, so an active role is not duplicated;
+  Devin creation also sends `idempotent: true`.
+- SQLite stores session IDs, roles, URLs, status, ACUs, outputs, fingerprints,
+  active state, workflow linkage, and transition events.
+- On restart, active sessions are reconciled from SQLite before dispatch;
+  terminal workflows and settled-output fingerprints are not restarted.
+- GitHub deliveries are deduplicated by `X-GitHub-Delivery` in SQLite.
+
+## 6. Dashboard and APIs
+
+Open `/` for KPI cards (backlog, active, waiting, PRs, completion, failures,
+ACUs, utilization), a live workflow table with stage age/session/PR links, a
+funnel, delivery metrics, pipeline lanes, and a lock-guarded `Poll now` button.
+
+Open `/issues/{n}` for lifecycle steps, issue metadata, Devin sessions,
+outcome, investigation/remediation/analysis outputs, and the event timeline.
+
+The JSON and operational endpoints are:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/metrics` | Persisted state counts, groups, funnel, rates, medians, throughput, and ACUs |
+| `GET /api/workflows` | Workflow list with timestamps, waiting duration, PR, and session summaries |
+| `GET /api/workflows/{owner}/{repo}/{n}` | Full workflow, events, sessions, and structured outputs |
+| `GET /healthz` | Health response with target repository and dry-run flag |
+| `POST /admin/poll-now` | Run one serialized workflow tick and return counts |
+| `POST /webhooks/github` | Signed GitHub `issues` and `issue_comment` intake |
+
+All dashboard values come from persisted SQLite workflow, session, and event
+data. There is no sample or hard-coded dashboard data.
+
+## 7. Run
+
+### Docker Compose
 
 ```bash
-cp .env.example .env   # fill in secrets
+cp .env.example .env
+# Edit .env with TARGET_REPO, GITHUB_TOKEN, and Devin credentials.
 docker compose up --build
 ```
 
-### Locally
+The container listens on `8000` and stores SQLite in the
+`orchestrator-data` volume at `/data/orchestrator.db`.
+
+### Local virtual environment
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env  # edit credentials
+.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-The server exposes `POST /webhooks/github` and `GET /healthz`.
+### Dry-run walkthrough
 
-## Simulate the workflow (no webhook required)
-
-With the server running in dry-run mode you can exercise the full pipeline —
-signature check, dedup, dispatch, poll, comment — with zero credentials:
+Dry-run fakes Devin sessions and logs comments instead of posting them. GitHub
+polling still needs read access, so set `GITHUB_TOKEN` for real issues:
 
 ```bash
-DRY_RUN=true uvicorn app.main:app --port 8000
-
-# fake issue opened:
-python scripts/simulate.py issue-opened --number 1 --title "Dashboard crashes on load"
-
-# human replying on a tracked issue (forwards into the recorded session):
-python scripts/simulate.py issue-comment --number 1 --body "It's the Explore page"
-
-# build the payload from a real issue in TARGET_REPO (needs GITHUB_TOKEN):
-python scripts/simulate.py issue-opened --real --number 4
+DRY_RUN=true \
+ENABLE_POLLING=true \
+POLL_BACKLOG=true \
+ELIGIBILITY_LABEL= \
+TARGET_REPO=lilyvc/superset \
+GITHUB_TOKEN="$GITHUB_TOKEN" \
+.venv/bin/uvicorn app.main:app --port 8000
 ```
 
-The simulated comment is written to the server log. Turn off `DRY_RUN` and set real
-credentials to run end-to-end for real — the same `simulate.py` calls drive it.
-
-## Polling mode (no webhook needed)
-
-If you can't add a webhook or expose a URL — e.g. just trying it out — run with
-`ENABLE_POLLING=true`. The service then polls the GitHub API itself: new issues
-opened after startup get dispatched to Devin, and new human comments on tracked
-issues are forwarded into their sessions (bot comments, including the
-orchestrator's own, are ignored). `POLL_BACKLOG=true` also dispatches the
-existing open-issues backlog instead of baselining it.
+In another terminal, seed an issue with a signed simulated webhook:
 
 ```bash
-ENABLE_POLLING=true TARGET_REPO=lilyvc/superset uvicorn app.main:app --port 8000
+.venv/bin/python scripts/simulate.py issue-opened \
+  --number 1 --title "Dashboard crashes on load"
 ```
 
-## Point GitHub at it (real events)
+Run serialized ticks and open the dashboard:
 
-1. Expose the service on a public URL (deploy it, or `ngrok http 8000` / `cloudflared`
-   for local testing).
-2. In the target repo: **Settings → Webhooks → Add webhook**
-   - Payload URL: `https://<your-host>/webhooks/github`
-   - Content type: `application/json`
-   - Secret: same value as `GITHUB_WEBHOOK_SECRET`
-   - Events: **Issues** and **Issue comments** (or "Let me select individual events")
-3. GitHub sends a `ping`; check `/healthz` and the server logs.
-
-Open an issue on the target repo → a Devin session link appears in the logs → a summary
-comment lands on the issue.
-
-## How a reply resumes the workflow
-
-When a Devin session finishes `blocked` (typically because it asked a question), the
-orchestrator posts the question as an issue comment and keeps the `issue → session_id`
-mapping in SQLite. A subsequent `issue_comment.created` webhook looks up that mapping and
-calls `POST /v1/sessions/{id}/message`, so the **same** Devin session picks the work back
-up with the reply as new context — a new session is never created for replies.
-
-## Project layout
-
+```bash
+curl -X POST http://localhost:8000/admin/poll-now
+curl -X POST http://localhost:8000/admin/poll-now
+curl -X POST http://localhost:8000/admin/poll-now
+open http://localhost:8000
 ```
+
+On Linux, replace `open` with `xdg-open`. `DRY_RUN=true` prevents Devin and
+GitHub comment writes while keeping the same state-machine path.
+
+### Environment variables
+
+| Name | Default | Purpose |
+|---|---:|---|
+| `TARGET_REPO` | `lilyvc/superset` | GitHub repository in `owner/name` form |
+| `GITHUB_TOKEN` | empty | GitHub API credential for the target repository |
+| `GITHUB_WEBHOOK_SECRET` | empty | Secret used to verify `X-Hub-Signature-256`; recommended |
+| `GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL; set for GHES |
+| `DEVIN_API_KEY` | empty | Devin service-user key or personal access token |
+| `DEVIN_API_BASE_URL` | `https://api.devin.ai` | Devin API base URL |
+| `DEVIN_ORG_ID` | empty | Required with a PAT; selects the org-scoped v3 API. A service-user key uses v1 |
+| `DRY_RUN` | `false` | Fake Devin sessions and log comments instead of external writes |
+| `POLL_INTERVAL_SECONDS` / `POLL_TIMEOUT_SECONDS` | `10` / `1800` | Legacy summary-orchestrator polling interval / timeout |
+| `MAX_ACU_LIMIT` | unset | Optional global cap applied to each created session |
+| `ELIGIBILITY_LABEL` | `devin-remediate` | Only issues with this label are eligible; empty means every open issue |
+| `MAX_CONCURRENT_DEVINS` | `3` | Maximum active Devin sessions across all roles |
+| `MAX_REMEDIATION_ATTEMPTS` | `2` | Maximum verification retries for a Remediator |
+| `ANALYSIS_ENABLED` | `true` | Dispatch the Analyst role after investigation |
+| `INVESTIGATOR_ACU_LIMIT` / `REMEDIATOR_ACU_LIMIT` / `ANALYST_ACU_LIMIT` | `10` / `25` / `8` | Per-role session ACU limits |
+| `REMEDIATION_LABEL` | empty | Legacy orchestrator label setting; the active engine records `remediation_started_at` |
+| `DB_PATH` | `orchestrator.db` | SQLite database path; Compose overrides it to `/data/orchestrator.db` |
+| `ENABLE_POLLING` | `false` | Start the GitHub poller and run a startup tick |
+| `GITHUB_POLL_INTERVAL_SECONDS` | `30` | GitHub discovery/comment polling interval |
+| `POLL_BACKLOG` | label-dependent | Include existing eligible open issues; otherwise baseline existing issues at startup |
+
+`DEVIN_ORG_ID` selects the org-scoped v3 API for PATs; service-user keys use v1.
+The client normalizes both response shapes.
+
+## 8. Demo flow
+
+1. Label an actionable `TARGET_REPO` issue `devin-remediate`.
+2. Within `GITHUB_POLL_INTERVAL_SECONDS` (or after **Poll now**), the dashboard
+   shows `QUEUED` → `INVESTIGATING` and an Investigator session link.
+3. Investigator Devin posts reproduction/root-cause evidence; the workflow
+   enters `REMEDIATING`, and Remediator Devin opens a PR with tests.
+4. Python validates the contract, shows the PR/evidence in `READY_FOR_REVIEW`,
+   and PR reconciliation reaches `COMPLETED` after merge.
+
+For a vague issue, Investigator enters `NEEDS_INFO` and posts one question.
+Reply on the issue; polling forwards the answer to the same session.
+
+## 9. Advanced Devin capabilities used
+
+- Structured output feeds deterministic gates; creation uses `idempotent: true`.
+- Roles have separate prompts, schemas, tags, titles, and ACU limits; human
+  answers return to the same session.
+- Both `skills/*.md` playbooks are injected into prompts.
+- Investigator and Remediator prompts direct browser/computer use for UI bugs
+  and require screenshot/recording evidence where appropriate.
+
+## 10. Intentionally not implemented
+
+- **Webhooks as the primary reliability mechanism:** signed, deduplicated
+  webhooks are supported, but polling avoids requiring a public URL.
+- **Kafka, Redis, Celery, or Kubernetes:** SQLite plus one asyncio process is
+  sufficient at the current scale.
+- **Auto-merge:** PRs remain visible for engineering review.
+- **Multi-repository fan-out:** each process has one `TARGET_REPO`.
+- **Dashboard authentication:** deploy the service behind your own network,
+  proxy, or access-control layer.
+
+## 11. Known risks and limits
+
+- Devin sessions can be long-running and consume ACUs; limits reduce but do
+  not eliminate cost risk.
+- Gates rely on honest structured output; evidence requirements and human PR
+  review mitigate this but do not replace review.
+- GitHub rate limits, eventual consistency, and the single-process SQLite
+  design can delay work; persisted workflows/events remain operational truth.
+
+## 12. Project layout
+
+```text
 app/
-  main.py          FastAPI app, signature verification, webhook routing
-  orchestrator.py  Event handling, Devin session lifecycle, commenting
-  devin_client.py  Devin v1 API client (create/poll/message sessions)
-  github_client.py GitHub REST client (comments, labels)
-  store.py         SQLite: webhook delivery dedup + issue→session mapping
-  config.py        Env-based settings
-scripts/simulate.py  Signed fake webhook sender
-tests/               pytest
-Dockerfile / docker-compose.yml
+  main.py          FastAPI, dashboard/API routes, webhook verification
+  workflow.py      Multi-stage engine, gates, dispatch, replies
+  states.py        State, role, waiting, terminal, and funnel vocabulary
+  prompts.py       Role prompts, schemas, and comment templates
+  devin_client.py  Devin v1/v3 client and dry-run sessions
+  devin_status.py  Devin status/message normalization
+  github_client.py GitHub issues, comments, users, and PRs
+  store.py         SQLite workflows, sessions, events, delivery dedup
+  metrics.py       Database-derived metrics; poller.py periodic tick loop
+  static/          Dashboard and issue-detail HTML/CSS
+scripts/simulate.py  Signed fake or real webhook sender
+skills/              Investigator and verification playbooks
+tests/               Workflow and webhook tests
+Dockerfile  docker-compose.yml  .env.example
 ```
 
-## Security notes
+## 13. Security notes
 
-- Webhook payloads are verified with `X-Hub-Signature-256` when a secret is configured.
-- Only `issues` and `issue_comment` events are handled; everything else is ignored.
-- The GitHub token only ever writes comments/labels on `TARGET_REPO`.
-- Devin sessions created here are given no repository secrets beyond what the prompt
-  contains; scope `secret_ids` on session creation if you later need that.
+- Configure `GITHUB_WEBHOOK_SECRET`; signed requests use `X-Hub-Signature-256`.
+  Without a secret, verification is intentionally open for local development.
+- Only `issues`, `issue_comment`, and `ping` webhook paths are handled.
+- Scope GitHub and Devin credentials to the target repository/session needs;
+  protect them like production credentials. Never commit `.env`, tokens,
+  databases, or sensitive session output.
+- The dashboard and `/admin/poll-now` have no built-in authentication; use a
+  trusted network or authenticated reverse proxy.
+- This is external orchestration: it does not copy source into this repository
+  or install code into `TARGET_REPO`.

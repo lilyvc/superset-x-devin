@@ -1,62 +1,39 @@
 # Roadmap / TODO
 
-Planned follow-ups, roughly in order. v1 (current) does: issue opened → Devin
-summarizes → comment posted → replies forward back into the same session.
+The deterministic multi-stage workflow is implemented. The Python engine owns
+state transitions, persists workflows/sessions/events in SQLite, and uses
+Investigator, Remediator, and Analyst Devin sessions with structured-output
+gates.
 
-## Dispatch & idempotency
+## Completed
 
-- [ ] **Ensure the issue has not already been dispatched** — a basic `session_id`
-      check exists; promote this to a real per-issue state machine
-      (`received → dispatched → working → waiting_on_reply → summarized/remediating → done`)
-      so retries, `reopened`, and race-y deliveries can't double-dispatch.
-- [ ] **Enforce idempotency end-to-end** —
-      - Devin session creation already sends `idempotent: true`; add a deterministic
-        prompt/session key so a retried dispatch re-attaches to the existing session
-        instead of relying on the store alone.
-      - Make comment posting idempotent (e.g. upsert a single orchestrator comment
-        per issue instead of appending duplicates on redelivery).
-      - Deliveries are deduped by `X-GitHub-Delivery`; extend to a processed-event log
-        if at-least-once semantics ever matter beyond retries.
-- [ ] **Mark the issue as remediation started** — apply `REMEDIATION_LABEL`
-      (implemented) and/or set an assignee + status comment so humans see dispatch
-      state at a glance. Decide whether labeling waits for the remediation phase
-      rather than the summary phase.
+- [x] **Dispatch deduplication** — `WorkflowEngine._dispatch` checks persisted
+      role sessions and active-session capacity before creating work;
+      `app/workflow.py`.
+- [x] **End-to-end idempotency** — Devin creation sends `idempotent: true`,
+      workflow/session uniqueness and fingerprints are persisted by
+      `app/store.py`, and GitHub deliveries are deduplicated by delivery ID;
+      `app/devin_client.py`, `app/workflow.py`, `app/store.py`.
+- [x] **Mark remediation started** — remediation dispatch records
+      `remediation_started_at` in the workflow; the legacy compatibility path
+      also supports `REMEDIATION_LABEL` in `app/orchestrator.py`;
+      `app/workflow.py`, `app/orchestrator.py`.
+- [x] **Devin remediation workflow** — investigation, clarification, root
+      cause, remediation, verification, PR reconciliation, and analyst
+      follow-up are implemented with schemas, prompts, gates, comments, and
+      tests; `app/workflow.py`, `app/prompts.py`, `tests/test_workflow.py`.
 
-## Remediation workflow
+## Remaining follow-ups
 
-- [ ] **Start the Devin remediation workflow** — after triage, dispatch a second
-      session (or upgrade the triage session) that actually fixes the issue:
-      branch → implement → open a PR on the target repo. Needs:
-      - a remediation prompt template + playbook/knowledge selection
-      - `structured_output_schema` for the result (pr_url, summary, tests run)
-      - pulling `pull_request.url` from the finished session and commenting it
-        on the issue
-      - ACU limits / timeout policy per dispatch
-- [ ] Decide the trigger: automatic after summary, vs. gated on a maintainer
-      command (e.g. `/devin fix` comment or a label applied by a human).
-
-## Conversation resume (partially implemented)
-
-- [x] `issue_comment.created` on a tracked issue forwards the reply into the
-      recorded Devin session — decided design: **same session resumes**, keyed by
-      the SQLite `issue → session_id` map. New sessions are never created for replies.
-- [ ] Handle the suspended case: `send_message` requires a running session —
-      detect `blocked`/`suspend_requested` and resume before sending, or surface
-      "session expired, redispatch?" back on the issue.
-- [x] Ignore the orchestrator's own comments (and bot accounts generally) so a
-      posted summary/question can't be forwarded back into the session as a "reply"
-      (done for the polling path — comments from `type: Bot` users are skipped).
-- [ ] Distinguish a **question reply** from an explicit **command** (`/devin fix`,
-      `/devin stop`) so humans can steer the workflow from the issue thread.
-
-## Operations
-
-- [ ] Exponential backoff + jitter on session polling; a dead-letter path when
-      `POLL_TIMEOUT_SECONDS` is exceeded.
-- [ ] Persist redelivered-but-unprocessed events for replay.
-- [ ] Structured logging + metrics endpoint; alerting on `poll_failed` /
-      `comment_failed` states.
-- [ ] Multi-repo: keep `TARGET_REPO` as config now; later a repo allowlist with
-      per-repo settings if one deployment should serve several repos.
-- [ ] Optional: verify the GitHub App manifest route (installation tokens)
-      instead of a PAT for production use.
+- [ ] **Webhook parity for label events** — handle label-added/removed events
+      directly so eligibility changes can trigger discovery without waiting for
+      the next poll.
+- [ ] **Dashboard authentication** — add an optional auth layer or integrate
+      with the deployment's identity-aware proxy before exposing the dashboard
+      publicly.
+- [ ] **Per-repository configuration** — support an allowlist or separate
+      settings when one deployment needs to serve multiple repositories.
+- [ ] **Retry backoff tuning** — add exponential backoff, jitter, and a
+      dead-letter path for repeated Devin/GitHub failures and poll timeouts.
+- [ ] **Analyst follow-up PR automation** — define bounded policy for converting
+      Analyst recommendations into follow-up issues or PRs with human approval.
