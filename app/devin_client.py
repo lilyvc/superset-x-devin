@@ -68,7 +68,8 @@ class DevinClient:
                 output = {"systemic_risk": "none", "summary": "Dry-run analysis",
                           "recommended_followup": "NONE", "followup_issue_url": None}
             session = {"session_id": session_id, "url": "https://app.devin.ai/dry-run/" + session_id,
-                       "status": "exit", "structured_output": output, "acus": 0.0, "pull_requests": []}
+                       "status": "exit", "structured_output": output,
+                       "acus_consumed": 0.0, "pull_requests": []}
             self._dry_sessions[session_id] = session
             return session
         resp = await self._client.post(f"{self._base}/sessions", json=body)

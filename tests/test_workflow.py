@@ -66,12 +66,16 @@ class FakeGitHub:
         self.issues = issues
         self.comments = {i["number"]: [] for i in issues}
         self.posted = []
+        self.pull = {"state": "open", "merged": False}
 
     async def list_open_issues(self, repo):
         return self.issues
 
     async def get_issue(self, repo, number):
         return next(i for i in self.issues if i["number"] == number)
+
+    async def get_pull(self, repo, number):
+        return self.pull
 
     async def list_issue_comments(self, repo, number):
         return self.comments[number]
@@ -136,6 +140,68 @@ def test_needs_info_reply_resumes_investigator(tmp_path):
     github.comments[1].append({"id": 9, "body": "Linux", "user": {"login": "human"}})
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
+
+
+def test_waiting_empty_output_question_stays_needs_info(tmp_path):
+    issue = {"number": 1, "title": "Bug", "body": "body",
+             "html_url": "https://github.com/owner/repo/issues/1",
+             "user": {"login": "reporter"}, "labels": []}
+    settings = _settings(tmp_path, dry_run=False)
+    github = FakeGitHub([issue])
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    response = devin._dry_sessions[session["session_id"]]
+    response.update(status="suspended", status_detail="waiting_for_user",
+                    structured_output={},
+                    messages=[{"type": "devin_message", "message": "Which database?"}])
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.NEEDS_INFO.value
+    assert "Which database?" in github.posted[-1][1]
+    response["status_detail"] = "inactivity"
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.NEEDS_INFO.value
+
+
+def test_waiting_empty_output_uses_devin_question(tmp_path):
+    issue = {"number": 1, "title": "Bug", "body": "body",
+             "html_url": "https://github.com/owner/repo/issues/1",
+             "user": {"login": "reporter"}, "labels": []}
+    settings = _settings(tmp_path, dry_run=False)
+    github = FakeGitHub([issue])
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    devin._dry_sessions[session["session_id"]].update(
+        status="suspended", status_detail="waiting_for_user",
+        structured_output={},
+        messages=[{"type": "devin_message", "message": "Please share the version."}],
+    )
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.NEEDS_INFO.value
+    assert "Please share the version." in github.posted[-1][1]
+
+
+def test_merged_pr_reaches_completed(tmp_path):
+    issue = {"number": 1, "title": "Bug", "body": "body",
+             "html_url": "https://github.com/owner/repo/issues/1",
+             "user": {"login": "reporter"}, "labels": []}
+    settings = _settings(tmp_path)
+    github = FakeGitHub([issue])
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.READY_FOR_REVIEW.value
+    github.pull = {"state": "closed", "merged": True}
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.COMPLETED.value
 
 
 def test_concurrency_cap(tmp_path):

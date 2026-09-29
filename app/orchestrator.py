@@ -22,7 +22,7 @@ import logging
 
 from .config import Settings
 from .devin_client import SUMMARY_SCHEMA, DevinClient
-from .devin_status import _session_state
+from .devin_status import _last_devin_message, _session_state
 from .github_client import GitHubClient
 from .store import Store
 
@@ -43,16 +43,6 @@ being asked or reported, the likely area of the codebase involved, and the
 single most useful next step. Fill in the structured output. Do not modify
 any code and do not create branches or pull requests.
 """
-
-
-def _last_devin_message(session: dict) -> str | None:
-    """Best-effort extraction of Devin's latest message text."""
-    messages = session.get("messages") or []
-    for msg in reversed(messages):
-        mtype = (msg.get("type") or "").lower()
-        if "devin" in mtype or (msg.get("origin") or "").lower() == "devin":
-            return msg.get("message")
-    return messages[-1]["message"] if messages else None
 
 
 class Orchestrator:

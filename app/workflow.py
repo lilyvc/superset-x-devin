@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .config import Settings
-from .devin_status import _session_state
+from .devin_status import _last_devin_message, _session_state
 from .github_client import GitHubClient
 from .prompts import (
     ANALYSIS_SCHEMA,
@@ -113,6 +113,11 @@ class WorkflowEngine:
             logger.exception("session reconciliation failed")
             self.store.add_event(None, "error", detail=f"reconcile: {exc}")
         try:
+            await self._reconcile_prs()
+        except Exception as exc:
+            logger.exception("pull request reconciliation failed")
+            self.store.add_event(None, "error", detail=f"pull requests: {exc}")
+        try:
             await self._replies()
         except Exception as exc:
             logger.exception("reply forwarding failed")
@@ -156,10 +161,13 @@ class WorkflowEngine:
                                workflow["issue_number"], exc)
                 continue
             if issue.get("state") == "closed":
-                self.store.set_state(
-                    workflow["id"], State.ESCALATED,
-                    failure_reason="issue closed on GitHub before workflow finished",
-                )
+                if workflow["state"] in {State.PR_OPENED.value, State.READY_FOR_REVIEW.value}:
+                    self.store.set_state(workflow["id"], State.COMPLETED, completed_at=utcnow())
+                else:
+                    self.store.set_state(
+                        workflow["id"], State.ESCALATED,
+                        failure_reason="issue closed on GitHub before workflow finished",
+                    )
 
     async def _reconcile_sessions(self) -> None:
         for session_row in self.store.list_active_sessions():
@@ -171,6 +179,27 @@ class WorkflowEngine:
                     session_row["workflow_id"], "error", detail=f"session {session_row['session_id']}: {exc}"
                 )
 
+    async def _reconcile_prs(self) -> None:
+        states = {State.PR_OPENED.value, State.READY_FOR_REVIEW.value}
+        for workflow in self.store.list_workflows(states):
+            if not workflow.get("pr_number"):
+                continue
+            try:
+                pull = await self.github.get_pull(workflow["repo"], workflow["pr_number"])
+                if pull.get("merged"):
+                    self.store.set_state(workflow["id"], State.COMPLETED, completed_at=utcnow())
+                elif pull.get("state") == "closed":
+                    self.store.set_state(
+                        workflow["id"], State.FAILED,
+                        failure_reason="PR closed without merge",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not reconcile PR #%s: %s", workflow["pr_number"], exc)
+                self.store.add_event(
+                    workflow["id"], "error",
+                    detail=f"pull request reconciliation: {exc}",
+                )
+
     async def _reconcile_session(self, row: dict) -> None:
         response = await self.devin.get_session(row["session_id"])
         output = response.get("structured_output") or {}
@@ -180,40 +209,58 @@ class WorkflowEngine:
         self.store.update_session(
             row["session_id"], devin_status=response.get("status_enum") or response.get("status"),
             devin_status_detail=response.get("status_detail") or detail,
-            acus=response.get("acus") or response.get("acu"),
+            acus=response.get("acus_consumed")
+            if response.get("acus_consumed") is not None
+            else response.get("acu"),
             structured_output=output, output_fingerprint=fp, pull_requests=pulls,
             last_polled_at=utcnow(),
         )
         settled = detail in {"final", "waiting"}
-        if not settled or (fp == row.get("acted_fingerprint") and output):
+        if not settled or fp == row.get("acted_fingerprint"):
             return
         workflow = self.store.get_workflow_by_id(row["workflow_id"])
         if not workflow:
             return
         role = row["role"]
         if role == Role.INVESTIGATOR.value:
-            await self._handle_investigator(row, workflow, output, status, fp)
+            await self._handle_investigator(row, workflow, output, status, detail, fp)
         elif role == Role.REMEDIATOR.value:
-            await self._handle_remediator(row, workflow, output, status, fp, pulls)
+            await self._handle_remediator(row, workflow, output, status, detail, fp, pulls)
         elif role == Role.ANALYST.value:
             await self._handle_analyst(row, workflow, output, fp)
 
-    async def _handle_investigator(self, row, workflow, out, status, fp):
+    async def _handle_investigator(self, row, workflow, out, status, session_kind, fp):
         self.store.set_state(workflow["id"], workflow["state"], investigation=out)
         if not out:
-            self.store.set_state(workflow["id"], State.FAILED,
-                                failure_reason="investigator session ended without structured output")
-            self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
-                                      acted_fingerprint=fp)
+            if session_kind == "waiting":
+                question = _last_devin_message(
+                    await self.devin.get_session(row["session_id"])
+                ) or "Please provide more information so the investigation can continue."
+                self.store.set_state(
+                    workflow["id"], State.NEEDS_INFO, needs_info_kind=None,
+                    waiting_since=utcnow(), investigation=out,
+                )
+                await self._comment(
+                    workflow, clarification_comment(question, None, row.get("url", "")),
+                )
+                self.store.update_session(row["session_id"], acted_fingerprint=fp)
+            else:
+                self.store.set_state(
+                    workflow["id"], State.FAILED,
+                    failure_reason="investigator session ended without structured output",
+                )
+                self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
+                                          acted_fingerprint=fp)
             return
         kind = out.get("status")
+        question = out.get("clarification_question") or "Please provide more information."
         if kind == "NEEDS_INFO" or (not out.get("enough_information") and out.get("clarification_question")):
             self.store.set_state(
                 workflow["id"], State.NEEDS_INFO, needs_info_kind=out.get("needs_info_kind"),
                 waiting_since=utcnow(), investigation=out,
             )
             await self._comment(
-                workflow, clarification_comment(out.get("clarification_question", "Please provide more information."),
+                workflow, clarification_comment(question,
                                                 out.get("needs_info_kind"), row.get("url", "")),
             )
             self.store.update_session(row["session_id"], acted_fingerprint=fp)
@@ -256,14 +303,27 @@ class WorkflowEngine:
         self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
                                   acted_fingerprint=fp)
 
-    async def _handle_remediator(self, row, workflow, out, status, fp, pulls):
+    async def _handle_remediator(self, row, workflow, out, status, session_kind, fp, pulls):
         pr_url = out.get("pr_url") or self._pull_url(pulls)
         self.store.set_state(workflow["id"], workflow["state"], remediation=out)
         if not out:
-            self.store.set_state(workflow["id"], State.FAILED,
-                                failure_reason="remediator session ended without structured output")
-            self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
-                                      acted_fingerprint=fp)
+            if session_kind == "waiting":
+                reason = _last_devin_message(
+                    await self.devin.get_session(row["session_id"])
+                ) or "Remediator is waiting for human input."
+                self.store.set_state(
+                    workflow["id"], State.BLOCKED, failure_reason=reason,
+                    waiting_since=utcnow(),
+                )
+                await self._comment(workflow, f"**Remediation blocked**\n\n{reason}")
+                self.store.update_session(row["session_id"], acted_fingerprint=fp)
+            else:
+                self.store.set_state(
+                    workflow["id"], State.FAILED,
+                    failure_reason="remediator session ended without structured output",
+                )
+                self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
+                                          acted_fingerprint=fp)
             return
         if out.get("status") == "BLOCKED":
             reason = "; ".join(out.get("blockers") or [out.get("summary", "Remediator blocked")])
@@ -324,11 +384,14 @@ class WorkflowEngine:
                 {s.value for s in {State.NEEDS_INFO, State.BLOCKED} | ACTIVE_STATES}
             ):
                 continue
-            comments = await self.github.list_issue_comments(workflow["repo"], workflow["issue_number"])
-            last_id = workflow.get("last_comment_id") or 0
             active = self.store.get_sessions(workflow["id"], active_only=True)
             session = next((s for s in active if s["role"] in
                             {Role.INVESTIGATOR.value, Role.REMEDIATOR.value}), None)
+            waiting = workflow["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value}
+            if not session and not waiting:
+                continue
+            comments = await self.github.list_issue_comments(workflow["repo"], workflow["issue_number"])
+            last_id = workflow.get("last_comment_id") or 0
             for comment in sorted(comments, key=lambda c: c.get("id", 0)):
                 if comment.get("id", 0) <= last_id:
                     continue
@@ -348,6 +411,11 @@ class WorkflowEngine:
                     self.store.set_state(workflow["id"], State.INVESTIGATING if
                                          workflow["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value}
                                          else workflow["state"], waiting_since=None)
+                elif workflow["state"] == State.BLOCKED.value:
+                    self.store.add_event(
+                        workflow["id"], "human_comment_unforwarded",
+                        detail={"comment_id": comment["id"], "reason": "no active session"},
+                    )
             current = self.store.get_workflow_by_id(workflow["id"])
             if current:
                 self.store.set_state(workflow["id"], current["state"], last_comment_id=last_id)

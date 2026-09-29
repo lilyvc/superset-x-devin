@@ -35,6 +35,11 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_pull(self, repo: str, pull_number: int) -> dict:
+        resp = await self._client.get(f"/repos/{repo}/pulls/{pull_number}")
+        resp.raise_for_status()
+        return resp.json()
+
     async def list_issue_comments(self, repo: str, issue_number: int) -> list[dict]:
         comments: list[dict] = []
         for page in range(1, 101):

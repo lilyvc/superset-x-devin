@@ -22,3 +22,22 @@ def _session_state(session: dict) -> tuple[str, str]:
         kind = "waiting" if detail == "waiting_for_user" else "final"
         return f"{status}:{detail}" if detail else status, kind
     return status or detail, "running"
+
+
+def _last_devin_message(session: dict) -> str | None:
+    """Extract the latest Devin-authored message across v1 and v3 shapes."""
+    messages = session.get("messages") or []
+    for message in reversed(messages):
+        message_type = (message.get("type") or "").lower()
+        origin = (message.get("origin") or "").lower()
+        role = (message.get("role") or "").lower()
+        if (
+            "devin" in message_type
+            or origin == "devin"
+            or role in {"assistant", "devin"}
+        ):
+            return message.get("message") or message.get("content")
+    if messages:
+        last = messages[-1]
+        return last.get("message") or last.get("content")
+    return None
