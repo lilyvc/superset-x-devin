@@ -18,8 +18,6 @@
     <div class="card stat"><h2>Needs attention</h2><div class="v" id="k-attn">–</div><div class="d" id="k-attn-sub">–</div></div>
     <div class="card stat"><h2>Fixes</h2><div class="v" id="k-fix">–</div><div class="d" id="k-fix-sub">–</div></div>
   </div>
-  <p class="small muted" style="margin:8px 0 14px">ACU = Agent Compute Unit — Devin's compute cost per session · <span id="acu-total">–</span> total.</p>
-
   <section class="card">
     <h2>Issues</h2>
     <div class="worklist" id="worklist"></div>
@@ -174,7 +172,7 @@ async function load(){
   $('#k-attn-sub').textContent=`${e.awaiting_input||0} clarification · ${e.awaiting_review||0} review`+(e.awaiting_blocked?` · ${e.awaiting_blocked} blocked`:'');
   $('#k-fix').textContent=e.verified_fixes??'–';
   $('#k-fix-sub').textContent=`${c.READY_FOR_REVIEW||0} ready · ${c.COMPLETED||0} merged`;
-  $('#acu-total').textContent=(+m.total_acus).toFixed(1);
+
   ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
   $('#worklist').innerHTML=ws.map(rowHtml).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo and it will be picked up automatically.</div>';
   $('#updated').textContent=new Date().toLocaleTimeString();
