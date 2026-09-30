@@ -70,6 +70,8 @@ class FakeGitHub:
         self.issues = issues
         self.pulls = pulls or []
         self.comments = {i["number"]: [] for i in issues}
+        self.review_comments = {}
+        self.reviews = {}
         self.posted = []
         self.pull = {"state": "open", "merged": False, "head": {"sha": "abc123"}}
         self.checks = {
@@ -98,7 +100,13 @@ class FakeGitHub:
         return self.checks
 
     async def list_issue_comments(self, repo, number):
-        return self.comments[number]
+        return self.comments.get(number, [])
+
+    async def list_pull_review_comments(self, repo, number):
+        return self.review_comments.get(number, [])
+
+    async def list_pull_reviews(self, repo, number):
+        return self.reviews.get(number, [])
 
     async def post_issue_comment(self, repo, number, body):
         self.posted.append((number, body))
@@ -462,6 +470,79 @@ def test_blocked_reply_resumes_finished_session(tmp_path):
     kinds = {e["kind"] for e in store.get_events(1)}
     assert "human_reply_resumed_session" in kinds
     assert "human_comment_unforwarded" not in kinds
+
+
+def test_pr_comment_resumes_finished_remediator(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    for _ in range(3):
+        asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.READY_FOR_REVIEW.value
+    remediator = next(s for s in store.get_sessions(1) if s["role"] == "remediator")
+    store.update_session(remediator["session_id"], active=0)
+    github.comments[1].append({"id": 9, "body": "please use dropna=False",
+                               "user": {"login": "reviewer"}})
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.REMEDIATING.value
+    assert store.get_session(remediator["session_id"])["active"] == 1
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "pr_comment_resumed_session" in kinds
+
+
+def test_pr_review_comment_forwards_to_active_remediator(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    remediator = next(s for s in store.get_sessions(1) if s["role"] == "remediator")
+    store.update_session(remediator["session_id"], active=1)
+    store.set_state(1, State.REMEDIATING, pr_number=5,
+                    pr_url="https://github.com/owner/repo/pull/5")
+    github.review_comments[5] = [
+        {"id": 3, "body": "use dropna=False here", "path": "a.py", "line": 10,
+         "user": {"login": "reviewer"}},
+    ]
+    asyncio.run(engine._replies())
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "pr_comment_forwarded" in kinds
+    assert store.get_workflow("owner/repo", 1)["state"] == State.REMEDIATING.value
+
+
+def test_pr_review_body_and_bot_filtering(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    for _ in range(3):
+        asyncio.run(engine.tick())
+    store.set_state(1, State.READY_FOR_REVIEW, pr_number=5,
+                    pr_url="https://github.com/owner/repo/pull/5")
+    github.reviews[5] = [
+        {"id": 7, "body": "fix the null handling", "state": "CHANGES_REQUESTED",
+         "user": {"login": "reviewer"}},
+        {"id": 8, "body": "looks good", "state": "APPROVED",
+         "user": {"login": "reviewer2"}},
+        {"id": 9, "body": "ci noise", "state": "COMMENTED",
+         "user": {"login": "ci[bot]", "type": "Bot"}},
+    ]
+    asyncio.run(engine._replies())
+    events = [e for e in store.get_events(1)
+              if e["kind"].startswith("pr_comment_")]
+    # only the changes-requested review is forwarded; approval and bot skipped
+    assert len(events) == 1 and events[0]["kind"] == "pr_comment_resumed_session"
+    # a second pass forwards nothing new — the cursor advanced past all three
+    asyncio.run(engine._replies())
+    events = [e for e in store.get_events(1)
+              if e["kind"].startswith("pr_comment_")]
+    assert len(events) == 1
 
 
 def test_blocked_reply_recovers_with_fresh_session(tmp_path):

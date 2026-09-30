@@ -89,6 +89,17 @@ pre{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10
 .wl-meta{margin-top:2px}
 .origin{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:12px;white-space:nowrap}
 .origin.devin{color:var(--accent)}
+.prst{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;white-space:nowrap;vertical-align:1px}
+.prst.merged{background:var(--purple-soft);color:var(--purple)}
+.prst.ready{background:var(--ok-soft);color:var(--ok)}
+.prst.fail{background:var(--bad-soft);color:var(--bad)}
+.prst.pending{background:var(--accent-soft);color:var(--accent)}
+.st-line{display:flex;flex-direction:column;min-width:0}
+.st-label{white-space:nowrap}
+.st-note{font-weight:400;color:var(--muted);font-size:12px}
+.milestones li.bad .st-note{color:var(--bad)}
+.sesslist{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
+.sesslist .sess{font-weight:600}
 details.ops{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
 details.ops>summary{cursor:pointer;font-size:13px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;list-style:none}
 details.ops>summary::before{content:'▸ ';color:var(--faint)}

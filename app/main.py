@@ -96,9 +96,17 @@ async def poll_now(request: Request):
             "ran_at": datetime.now(timezone.utc).isoformat()}
 
 
+def _session_url(s: dict) -> str:
+    if s.get("url"):
+        return s["url"]
+    return ("https://app.devin.ai/sessions/"
+            + s["session_id"].removeprefix("devin-"))
+
+
 def _session_summary(store, workflow_id):
-    return [{"id": s["session_id"], "url": s.get("url"), "role": s["role"],
-             "status": s.get("devin_status"), "acus": s.get("acus")}
+    return [{"id": s["session_id"], "url": _session_url(s), "role": s["role"],
+             "status": s.get("devin_status"), "acus": s.get("acus"),
+             "created_at": s.get("created_at"), "finished_at": s.get("finished_at")}
             for s in store.get_sessions(workflow_id)]
 
 
@@ -116,7 +124,9 @@ async def list_workflows(request: Request):
                                         "completed_at", "waiting_since", "pr_url",
                                         "ci_status", "updated_at", "origin",
                                         "parent_issue_number", "failure_reason",
-                                        "needs_info_kind")}
+                                        "needs_info_kind", "triage", "investigation",
+                                        "remediation", "analysis",
+                                        "merged_without_changes")}
         if row["state"] in {"NEEDS_INFO", "BLOCKED"} and row.get("waiting_since"):
             item["waiting_for_seconds"] = (now - datetime.fromisoformat(row["waiting_since"])).total_seconds()
         else:
@@ -143,8 +153,11 @@ async def workflow_detail(repo_owner: str, repo: str, number: int, request: Requ
          "issue_url": c["issue_url"]}
         for c in store.children_of(f"{repo_owner}/{repo}", number)
     ]
+    sessions = store.get_sessions(row["id"])
+    for s in sessions:
+        s["url"] = _session_url(s)
     return {**row, "events": store.get_events(row["id"]),
-            "sessions": store.get_sessions(row["id"]), "children": children,
+            "sessions": sessions, "children": children,
             "parent": ({"issue_number": parent["issue_number"], "title": parent["title"],
                         "state": parent["state"], "issue_url": parent["issue_url"]}
                        if parent else None)}
@@ -178,6 +191,12 @@ async def github_webhook(request: Request):
     if event == "issues" and payload.get("action") in {"opened", "reopened"}:
         return await engine.handle_issue_event(payload)
     if event == "issue_comment" and payload.get("action") == "created":
+        return await engine.handle_issue_comment_event(payload)
+    # PR feedback surfaces: all three just trigger a tick; _pr_replies picks
+    # up the new comments from the API with per-surface cursors.
+    if event == "pull_request_review_comment" and payload.get("action") == "created":
+        return await engine.handle_issue_comment_event(payload)
+    if event == "pull_request_review" and payload.get("action") == "submitted":
         return await engine.handle_issue_comment_event(payload)
     if event == "ping":
         return {"handled": True, "reason": "ping"}

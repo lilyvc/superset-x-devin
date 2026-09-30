@@ -157,6 +157,13 @@ For a blocked workflow without an active session, it first tries to resume the l
 If resume fails, it creates a session with the blocker, question, and human reply in recovery context.
 The engine records reply, resume, and recovery events in SQLite.
 
+## Pull request feedback
+
+Once a workflow has a PR, the engine also reads three comment surfaces on it each tick, each with its own cursor because the id namespaces differ: conversation comments, inline review comments, and submitted review bodies (`CHANGES_REQUESTED` or `COMMENTED` only — approvals are not actionable).
+A human comment goes to an active Remediator session as a message.
+With no active Remediator, the engine resumes the last one and returns the workflow to `REMEDIATING`; if resume fails, it creates a Remediator session with the review feedback in recovery context.
+The same bot and self filters as issue replies apply.
+
 ## Issue provenance
 
 The `issue_origins` table records each issue's origin, parent issue number, Devin session ID, and creation time.

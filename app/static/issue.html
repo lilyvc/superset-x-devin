@@ -5,11 +5,15 @@
 <header><a href="/">← Dashboard</a><h1 id="title">Issue</h1><span class="sub" id="state"></span><span class="grow"></span><span class="muted small" id="updated"></span></header>
 <main>
   <div class="card" id="provenance" style="display:none;margin-bottom:14px"></div>
-  <div class="steps" id="steps"></div>
+  <div class="card" style="margin-bottom:14px">
+    <ul class="milestones" id="steps" style="margin:4px 0 10px"></ul>
+    <div class="sesslist small" id="sessions"></div>
+    <div class="small muted" id="meta" style="margin-top:8px"></div>
+  </div>
   <div class="grid g3">
     <div class="card"><h2>Issue</h2><div id="issue"></div></div>
-    <div class="card"><h2>Devin sessions</h2><div id="sessions"></div></div>
     <div class="card"><h2>Outcome</h2><div id="outcome"></div></div>
+    <div class="card"><h2>Links</h2><div id="links"></div></div>
   </div>
   <section class="grid g2">
     <div>
@@ -25,35 +29,99 @@
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const link=s=>esc(s).replace(/(https?:\/\/[^\s)]+)/g,'<a href="$1" target="_blank">$1</a>');
-const STEPS=['DISCOVERED','TRIAGING','QUEUED','INVESTIGATING','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW'];
-const BAD={NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1,SKIPPED:1};
+const STEPS=[
+  ['Triaging',['DISCOVERED','TRIAGING']],
+  ['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],
+  ['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],
+  ['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],
+];
+const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
 const number=location.pathname.split('/').pop();
 const fmt=iso=>iso?new Date(iso).toLocaleString():'–';
+const hm=iso=>iso?new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'–';
 const list=(a)=>Array.isArray(a)&&a.length?`<ul class="ev">${a.map(x=>`<li>${link(typeof x==='string'?x:JSON.stringify(x))}</li>`).join('')}</ul>`:'<span class="muted">–</span>';
 const kv=(rows)=>`<table class="small"><tbody>${rows.map(([k,v])=>`<tr><td class="muted" style="width:38%">${k}</td><td>${v}</td></tr>`).join('')}</tbody></table>`;
+function stepNote(w,i){
+  const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{};
+  if(i===0){
+    if(w.state==='SKIPPED')return esc(tri.rationale||w.failure_reason||'skipped by triage');
+    if(tri.verdict==='ACTIONABLE')return esc(tri.rationale||'actionable engineering defect');
+    if(tri.verdict==='NEEDS_INFO')return 'asked reporter: '+esc(tri.clarification_question||'more information needed');
+    if(tri.verdict)return esc(tri.verdict.toLowerCase());
+    return '';
+  }
+  if(i===1){
+    if(w.state==='NOT_REPRODUCIBLE')return 'could not reproduce — needs a better report or more detail';
+    if(w.state==='NEEDS_INFO')return 'needs input: '+esc((inv.clarification_question||tri.clarification_question||w.failure_reason||''));
+    if(inv.root_cause)return esc(inv.root_cause);
+    if(inv.summary)return esc(inv.summary);
+    return '';
+  }
+  if(i===2){
+    if(rem.fix_summary||rem.summary)return esc(rem.fix_summary||rem.summary);
+    if(w.ci_status&&w.state==='CI_CHECKING')return 'waiting on CI: '+esc(w.ci_status);
+    return '';
+  }
+  if(i===3){
+    if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
+    return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
+  }
+  return '';
+}
+function stepsHtml(w){
+  const reached=new Set(w.events.map(e=>e.to_state));reached.add(w.state);
+  const off=OFFTRACK[w.state];
+  const cur=off===undefined?STEPS.findIndex(([,ss])=>ss.includes(w.state)):-1;
+  return STEPS.map(([label,ss],i)=>{
+    let cls='',mark='';
+    if(off!==undefined){
+      if(i<off){cls='done';mark='✓'}
+      else if(i===off){cls='bad';mark='✗'}
+    }else{
+      const done=i<cur||w.state==='COMPLETED';
+      if(done){cls='done';mark='✓'}
+      else if(i===cur){cls='now'}
+    }
+    const note=stepNote(w,i);
+    return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label}</span>${note?`<span class="st-note">${note}</span>`:''}</div></li>`;
+  }).join('');
+}
 async function load(){
   const h=await fetch('/healthz').then(r=>r.json());
   const w=await fetch(`/api/workflows/${h.target_repo}/${number}`).then(r=>{if(!r.ok)throw new Error('not found');return r.json()});
-  $('#title').textContent=`#${w.issue_number} ${w.title||''}`;
+  $('#title').textContent=`Issue #${w.issue_number} ${w.title||''}`;
   $('#state').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>`;
   const devinFiled=w.origin==='DEVIN_DISCOVERED';
   const rows=[];
   if(devinFiled){
     rows.push(`<div><span class="origin devin">✦ Devin-discovered</span> — a related defect found while investigating ${w.parent?`<a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number} ${esc(w.parent.title||'')}</a>`:'another issue'}</div>`);
   }else{
-    rows.push('<div><span class="origin">● Reported</span> — opened by a human reporter</div>');
+    rows.push('<div>Opened by a human reporter</div>');
   }
   (w.children||[]).forEach(c=>{
     rows.push(`<div class="small" style="margin-left:18px">└ <span class="origin devin">✦ related defect discovered</span> <a href="/issues/${c.issue_number}">#${c.issue_number} ${esc(c.title||'')}</a> <span class="pill ${c.state}">${c.state.replace(/_/g,' ')}</span></div>`);
   });
   if(rows.length){$('#provenance').style.display='';$('#provenance').innerHTML=rows.join('');}
-  const reached=new Set(w.events.map(e=>e.to_state));reached.add(w.state);
-  $('#steps').innerHTML=STEPS.map(s=>`<div class="step ${s===w.state?'now':reached.has(s)?'done':''}">${s.replace(/_/g,' ')}</div>`).join('')+(BAD[w.state]||w.state==='NEEDS_INFO'||w.state==='COMPLETED'?`<div class="step ${BAD[w.state]?'bad':w.state==='COMPLETED'?'done':'now'}" style="grid-column:span 10">${w.state.replace(/_/g,' ')}${w.failure_reason?': '+esc(w.failure_reason):''}</div>`:'');
-  $('#issue').innerHTML=kv([['Repo',esc(w.repo)],['Issue',`<a href="${esc(w.issue_url)}" target="_blank">${esc(w.issue_url)}</a>`],['Author',esc(w.author)],['Labels',(w.labels||[]).map(l=>`<span class="pill">${esc(l)}</span>`).join(' ')],['Discovered',fmt(w.discovered_at)],['Triage started',fmt(w.triaged_started_at)],['Investigation started',fmt(w.started_at)],['Reproduced',fmt(w.reproduced_at)],['Root cause',fmt(w.root_cause_at)],['Remediation started',fmt(w.remediation_started_at)],['PR opened',fmt(w.pr_opened_at)],['Completed',fmt(w.completed_at)]]);
-  $('#sessions').innerHTML=w.sessions.length?kv(w.sessions.map(s=>[esc(s.role),`<a href="${esc(s.url)}" target="_blank" class="mono">${esc(s.session_id)}</a><br><span class="muted small">${esc(s.devin_status||'')}${s.devin_status_detail?' · '+esc(s.devin_status_detail):''}${s.acus!=null?' · '+(+s.acus).toFixed(2)+' ACU':''}${s.active?' · <b>active</b>':''}</span>`])):'<span class="muted">none yet</span>';
+  $('#steps').innerHTML=stepsHtml(w);
+  const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
+  const real=/(?:devin-)?[0-9a-f]{32}/;
+  $('#sessions').innerHTML=(w.sessions||[]).map(s=>{
+    const span=s.finished_at?`${hm(s.created_at)}–${hm(s.finished_at)}`:`${hm(s.created_at)} · running`;
+    const label=`${roleLabel[s.role]||esc(s.role)}`;
+    const linked=real.test(s.session_id||'')
+      ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">${label} ↗</a>`
+      : `<span class="muted">${label}</span>`;
+    return `${linked}<span class="muted">${span}${s.acus!=null?` · ${(+s.acus).toFixed(1)} ACU`:''}</span>`;
+  }).join('<span class="muted"> · </span>')||'<span class="muted">no sessions yet</span>';
+  $('#meta').textContent=[w.discovered_at&&`discovered ${new Date(w.discovered_at).toLocaleDateString()}`,w.pr_opened_at&&`PR opened ${new Date(w.pr_opened_at).toLocaleDateString()}`].filter(Boolean).join(' · ');
+  $('#issue').innerHTML=kv([['Repo',esc(w.repo)],['Issue',`<a href="${esc(w.issue_url)}" target="_blank">${esc(w.issue_url)}</a>`],['Author',esc(w.author)],['Labels',(w.labels||[]).map(l=>`<span class="pill">${esc(l)}</span>`).join(' ')]]);
+  $('#outcome').innerHTML=kv([['PR',w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">${esc(w.pr_url)}</a>`:'–'],['CI status',esc(w.ci_status||'–')],['Remediation attempts',w.remediation_attempts||0],['Needs-info kind',esc(w.needs_info_kind||'–')],['Waiting since',fmt(w.waiting_since)],['Failure / block reason',esc(w.failure_reason||'–')]]);
+  $('#links').innerHTML=kv([
+    ['GitHub issue',w.issue_url?`<a href="${esc(w.issue_url)}" target="_blank">open →</a>`:'–'],
+    ['Pull request',w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">open →</a>`:'–'],
+  ]);
   const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
   $('#tri').innerHTML=Object.keys(tri).length?kv([['Verdict',esc(tri.verdict)],['Issue kind',esc(tri.issue_kind)],['Suspected area',esc(tri.suspected_area||'–')],['Skip reason',esc(tri.skip_reason||'–')],['Duplicate of',esc(tri.duplicate_of||'–')],['Clarification question',esc(tri.clarification_question||'–')],['Rationale',esc(tri.rationale||'')]]):'<span class="muted">not yet available</span>';
-  $('#outcome').innerHTML=kv([['PR',w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">${esc(w.pr_url)}</a>`:'–'],['CI status',esc(w.ci_status||'–')],['Remediation attempts',w.remediation_attempts||0],['Needs-info kind',esc(w.needs_info_kind||'–')],['Waiting since',fmt(w.waiting_since)],['Failure / block reason',esc(w.failure_reason||'–')]]);
   $('#inv').innerHTML=Object.keys(inv).length?kv([['Status',esc(inv.status)],['Summary',esc(inv.summary)],['Expected',esc(inv.expected_behavior)],['Observed',esc(inv.observed_behavior)],['Reproduction steps',list(inv.reproduction_steps)],['Reproduction evidence',list(inv.reproduction_evidence)],['Root cause',`${esc(inv.root_cause)} <span class="muted">(${esc(inv.root_cause_confidence||'?')} confidence)</span>`],['Affected components',list(inv.affected_components)],['Verification plan',list(inv.verification_plan)],['Clarification question',esc(inv.clarification_question||'–')],['Missing information',list(inv.missing_information)]]):'<span class="muted">not yet available</span>';
   $('#rem').innerHTML=Object.keys(rem).length?kv([['Status',esc(rem.status)],['Fix',esc(rem.fix_summary||rem.summary)],['Files changed',list(rem.files_changed)],['Regression tests added',list(rem.regression_tests_added)],['Tests executed',Array.isArray(rem.tests_executed)&&rem.tests_executed.length?`<table class="small mono"><tbody>${rem.tests_executed.map(t=>`<tr><td>${esc(t.command)}</td><td><span class="pill ${t.result==='passed'?'COMPLETED':'FAILED'}">${esc(t.result)}</span></td></tr>`).join('')}</tbody></table>`:'–'],['Original reproduction re-run passed',rem.reproduction_rerun_passed?'yes':'no'],['Verification passed',rem.verification_passed?'yes':'no'],['Verification evidence',list(rem.verification_evidence)],['Blockers',list(rem.blockers)]]):'<span class="muted">not yet available</span>';
   $('#ana').innerHTML=Object.keys(ana).length?kv([['Systemic risk',esc(ana.systemic_risk)],['Summary',esc(ana.summary)],['Similar code locations',list(ana.similar_code_locations)],['Related issues',list(ana.related_issues)],['Missing engineering practice',esc(ana.missing_engineering_practice||'–')],['Recommended follow-up',`${esc(ana.followup_type||'')} — ${esc(ana.recommended_followup||'')}`],['Follow-up issue',ana.followup_issue_url?`<a href="${esc(ana.followup_issue_url)}" target="_blank">${esc(ana.followup_issue_url)}</a>`:'–']]):'<span class="muted">not yet available</span>';
