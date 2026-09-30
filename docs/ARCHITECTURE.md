@@ -194,7 +194,7 @@ After restart, the engine reads active sessions from SQLite and reconciles them 
 - The dashboard shows four KPIs: `Open issues`, `Working now`, `Waiting on a human`, and `Fixed & verified`, plus percent of merged PRs merged without changes and total ACUs.
 - `Waiting on a human` counts workflows in `READY_FOR_REVIEW`, `NEEDS_INFO`, `BLOCKED`, `FAILED`, and `ESCALATED` — anything where the next action is a person's.
 - The Issues list shows each workflow with a PR status badge and a Devin-discovered marker. Expanding a row shows a four-step tracker (Triaging, Investigating, Remediating, PR ready for review) with one-line results per step and links into each Devin session.
-- The issue page shows the same tracker plus a fifth, dashed Retrospecting step, the Retro results detail, and the GitHub issue and PR links.
+- The issue page shows the same tracker plus a fifth, dashed "Related defect analysis" step, the Retro results detail, and the GitHub issue and PR links.
 - `READY_FOR_REVIEW` requires green GitHub checks on the PR head commit; merged PRs mark `COMPLETED`.
 
 The `executive` metrics fields are `issues_open`, `in_progress`, `awaiting_human`, `awaiting_review`, `awaiting_input`, `awaiting_blocked`, `solved`, `merged_without_changes_pct`, `bugs_handled`, `verified_fixes`, `median_time_to_fix`, `needs_human`, `defects_discovered`, and `acus_per_verified_fix`.

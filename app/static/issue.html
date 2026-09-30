@@ -60,12 +60,42 @@ async function load(){
     <div class="card" id="evidence"></div>`;
 
   // ---------- tracker ----------
-  const STEPS=[['Triaging',['DISCOVERED','TRIAGING']],['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],['Find related defects',[]]];
+  const STEPS=[['Triaging',['DISCOVERED','TRIAGING']],['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],['Related defect analysis',[]]];
   const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
   const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
   const off=OFFTRACK[w.state];
   const cur=off===undefined?STEPS.findIndex(([,s])=>s.includes(w.state)):-1;
   const anaDone=Object.keys(ana).length||ss.some(s=>s.role==='analyst');
+  function note(i){
+    if(i===0){
+      if(w.state==='SKIPPED')return esc(tri.rationale||w.failure_reason||'skipped by triage');
+      if(tri.verdict==='ACTIONABLE')return esc(tri.rationale||'actionable engineering defect');
+      if(tri.verdict==='NEEDS_INFO')return 'asked reporter: '+esc(tri.clarification_question||'more information needed');
+      if(tri.verdict)return esc(tri.verdict.toLowerCase());
+      return '';
+    }
+    if(i===1){
+      if(w.state==='NOT_REPRODUCIBLE')return 'could not reproduce — needs a better report or more detail';
+      if(w.state==='NEEDS_INFO')return 'needs input: '+esc(inv.clarification_question||tri.clarification_question||w.failure_reason||'');
+      if(inv.root_cause)return esc(inv.root_cause);
+      if(inv.summary)return esc(inv.summary);
+      return '';
+    }
+    if(i===2){
+      if(rem.fix_summary||rem.summary)return esc(rem.fix_summary||rem.summary);
+      if(w.ci_status&&w.state==='CI_CHECKING')return 'waiting on CI: '+esc(w.ci_status);
+      return '';
+    }
+    if(i===3){
+      if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
+      return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
+    }
+    if(i===4){
+      if(ana.summary)return esc(ana.summary)+(ana.systemic_risk?` · ${esc(ana.systemic_risk)} risk`:'');
+      return '';
+    }
+    return '';
+  }
   $('#steps').innerHTML=STEPS.map(([label,st],i)=>{
     let cls='',mark='';
     if(i===4){cls='retro pre-retro';if(anaDone){cls+=' done';mark='✓'}}
@@ -77,9 +107,10 @@ async function load(){
       else if(i===cur){cls='now'}
     }
     const role=['triage','investigator','remediator',null,'analyst'][i];
-    const link=role?sessLink(byRole(role),'↗'):'';
+    const link=role?sessLink(byRole(role),'Devin session ↗'):'';
     const pr=i===3&&w.pr_url?` <a class="prst ${w.state==='COMPLETED'?'merged':w.ci_status==='passed'||w.state==='READY_FOR_REVIEW'?'ready':w.ci_status==='failed'?'fail':'pending'}" href="${esc(w.pr_url)}" target="_blank">#${w.pr_number||''}</a>`:'';
-    return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label} ${link}${pr}</span></div></li>`;
+    const n=note(i);
+    return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label} ${link}${pr}</span>${n?`<span class="st-note">${n}</span>`:''}</div></li>`;
   }).join('');
 
   // ---------- evidence panel: one compact box, stage-appropriate ----------
