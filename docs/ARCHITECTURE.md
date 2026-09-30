@@ -89,6 +89,14 @@ The dispatcher uses this order:
 The engine records one `budget_exceeded` event when this limit stops dispatch.
 After `SESSION_STALL_SECONDS`, the engine nudges a stalled session once. At twice that interval, it escalates the workflow.
 
+### Knowledge loop
+
+Every completed Retro Devin analysis is stored on its workflow (`analysis`
+column). New Investigator and Retro Devin sessions receive the recent
+defect-family findings for the repo in their prompts (`known_defects_block`
+in `app/prompts.py`), so the system recognizes recurring failure patterns
+across issues instead of starting each investigation from zero.
+
 ## Devin roles and gates
 
 | Role | Work |

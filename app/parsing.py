@@ -6,7 +6,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-
 _ISSUE_URL_RE = re.compile(r"/issues/(\d+)(?:[^0-9]|$)")
 _FIX_LINK_RE = re.compile(r"(?:fix(?:e[sd])?|fixing|close[sd]?|closing|resolve[sd]?|resolving)"
                           r"[:\s]+#?(\d+)", re.IGNORECASE)

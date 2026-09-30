@@ -5,7 +5,6 @@ from datetime import datetime
 from .config import Settings
 from .parsing import issue_labels, issue_type, parse_dt, tokens
 
-
 _FAILING_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled"}
 
 

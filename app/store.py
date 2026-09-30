@@ -288,6 +288,18 @@ class Store:
             ).fetchone()
         return dict(row) if row else None
 
+    def recent_analyses(self, repo: str, limit: int = 10) -> list[dict]:
+        """Completed defect-family analyses for this repo, newest first —
+        the knowledge loop feeding later sessions' prompts."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT issue_number, analysis FROM workflows "
+                "WHERE repo=? AND analysis IS NOT NULL AND analysis != '{}' "
+                "ORDER BY discovered_at DESC, id DESC LIMIT ?",
+                (repo, limit),
+            ).fetchall()
+        return [_decode(r, JSON_WORKFLOW_FIELDS) for r in rows]
+
     def children_of(self, repo: str, issue_number: int) -> list[dict]:
         """Workflows that were discovered by (as follow-ups of) this issue."""
         with self._conn() as conn:

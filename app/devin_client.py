@@ -36,6 +36,7 @@ class DevinClient:
         tags: list[str] | None = None,
         structured_output_schema: dict | None = None,
         max_acu_limit: int | None = None,
+        repos: list[str] | None = None,
     ) -> dict:
         body: dict = {"prompt": prompt, "idempotent": True}
         if title:
@@ -46,6 +47,10 @@ class DevinClient:
             body["structured_output_schema"] = structured_output_schema
         if max_acu_limit:
             body["max_acu_limit"] = max_acu_limit
+        if repos:
+            # Scoping the session to its target repos makes Devin pre-clone
+            # them, so the agent starts with the code already on disk.
+            body["repos"] = repos
         if self._dry_run:
             session_id = f"dry-run-session-{next(self._dry_counter)}"
             role = next((tag.split(":", 1)[1] for tag in tags or [] if tag.startswith("role:")), "investigator")
@@ -76,6 +81,7 @@ class DevinClient:
                 output = {"systemic_risk": "none", "summary": "Dry-run analysis",
                           "recommended_followup": "NONE", "followup_issue_url": None}
             session = {"session_id": session_id, "url": "https://app.devin.ai/dry-run/" + session_id,
+                       "repos": repos or [],
                        "status": "exit", "structured_output": output,
                        "acus_consumed": 0.0, "pull_requests": []}
             self._dry_sessions[session_id] = session
