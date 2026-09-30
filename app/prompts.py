@@ -1,4 +1,4 @@
-"""Prompts and structured-output contracts for the three Devin roles.
+"""Prompts and structured-output contracts for the role-specific Devin sessions.
 
 The structured output is a CONTRACT: the orchestrator reads these fields to
 decide state transitions (see workflow.py gates). Prompts are deliberately
@@ -183,6 +183,7 @@ URL: {url}
 ## Comments so far
 {comments}
 
+{known_defects}
 ## Procedure
 {skill}
 
@@ -405,6 +406,7 @@ Affected components: {affected_components}
 Expected: {expected_behavior}
 Observed: {observed_behavior}
 
+{known_defects}
 ## Investigate
 1. Does the same problematic code pattern exist elsewhere in the codebase?
    Search deliberately (grep/semantic) and list concrete locations.
@@ -425,9 +427,36 @@ Be concrete and cite file paths. Fill the structured output and finish.
 """
 
 
+def known_defects_block(analyses: list[dict]) -> str:
+    """Prior defect-family findings, injected into later sessions' prompts
+    so the system accumulates knowledge of recurring failure patterns."""
+    if not analyses:
+        return ""
+    lines = ["## Defect families already found by this system (treat as prior knowledge)"]
+    for item in analyses:
+        analysis = item.get("analysis") or {}
+        summary = (analysis.get("summary") or "").replace("\n", " ").strip()
+        if not summary:
+            continue
+        risk = analysis.get("systemic_risk") or "unknown"
+        lines.append(
+            f"- issue #{item['issue_number']} (systemic risk: {risk}): {summary[:400]}"
+        )
+    if len(lines) == 1:
+        return ""
+    lines.append(
+        "If this issue matches one of these families, say so explicitly in your "
+        "output and link the pattern.\n"
+    )
+    return "\n".join(lines)
+
+
 def render_comments(comments: list[dict]) -> str:
     if not comments:
         return "(none)"
+    # Cap context size: the newest comments carry the signal for triage and
+    # investigation; long threads otherwise bloat cheap sessions' prompts.
+    comments = comments[-25:]
     lines = []
     for c in comments:
         user = (c.get("user") or {}).get("login", "?")
@@ -476,7 +505,9 @@ def skip_comment(reason: str | None, rationale: str, session_url: str) -> str:
     )
 
 
-def investigator_prompt(repo: str, issue: dict, comments: list[dict]) -> str:
+def investigator_prompt(
+    repo: str, issue: dict, comments: list[dict], analyses: list[dict] | None = None
+) -> str:
     return INVESTIGATOR_PROMPT.format(
         repo=repo,
         number=issue["number"],
@@ -486,6 +517,7 @@ def investigator_prompt(repo: str, issue: dict, comments: list[dict]) -> str:
         body=issue.get("body") or "(empty)",
         comments=render_comments(comments),
         skill=_skill("superset-bug-investigation"),
+        known_defects=known_defects_block(analyses or []),
     )
 
 
@@ -522,7 +554,9 @@ def dedup_prompt(repo: str, issue: dict, inv: dict, candidates: list[str]) -> st
     )
 
 
-def analyst_prompt(repo: str, issue: dict, inv: dict) -> str:
+def analyst_prompt(
+    repo: str, issue: dict, inv: dict, analyses: list[dict] | None = None
+) -> str:
     return ANALYST_PROMPT.format(
         repo=repo,
         number=issue["number"],
@@ -532,6 +566,7 @@ def analyst_prompt(repo: str, issue: dict, inv: dict) -> str:
         affected_components=", ".join(inv.get("affected_components") or []) or "(none listed)",
         expected_behavior=inv.get("expected_behavior") or "(not stated)",
         observed_behavior=inv.get("observed_behavior") or "(not stated)",
+        known_defects=known_defects_block(analyses or []),
     )
 
 

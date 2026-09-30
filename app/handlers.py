@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from .devin_status import last_devin_message
 from .gates import investigation_gate, verification_gate
@@ -236,6 +237,11 @@ async def handle_remediator(engine: WorkflowEngine, s: SettledSession) -> None:
 async def handle_analyst(engine: WorkflowEngine, s: SettledSession) -> None:
     row, workflow, out = s.row, s.workflow, s.output
     engine.store.set_state(workflow["id"], workflow["state"], analysis=out)
+    if not out:
+        # A session that dies before producing a verdict leaves nothing to
+        # report — don't post an empty analysis comment on the issue.
+        _finish(engine, s)
+        return
     followup_number = issue_number_from_url(out.get("followup_issue_url"))
     if followup_number:
         already_known = (

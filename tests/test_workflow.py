@@ -711,3 +711,50 @@ def test_issue_number_from_url():
     assert issue_number_from_url("https://github.com/o/r/issues/42") == 42
     assert issue_number_from_url("https://github.com/o/r/pull/7") is None
     assert issue_number_from_url(None) is None
+
+
+def test_analyst_empty_output_posts_no_comment(tmp_path):
+    settings = _settings(tmp_path)
+    github = FakeGitHub([_issue()])
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    workflow = store.upsert_workflow("owner/repo", 1, title="bug", state="REMEDIATING")
+    row = {"session_id": "sess-ana", "url": "https://app.devin.ai/x"}
+    asyncio.run(handle_analyst(
+        engine,
+        SettledSession(
+            row=row, workflow=workflow, output={}, kind="final",
+            fingerprint="fp", response={}, pulls=[],
+        ),
+    ))
+    assert not github.comments.get(1)
+
+
+def test_known_defects_loop_reaches_prompts(tmp_path):
+    from app.prompts import analyst_prompt, investigator_prompt
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    store.upsert_workflow(
+        "owner/repo", 9, title="null groupby",
+        analysis={"summary": "pandas groupby drops NULL keys by default",
+                  "systemic_risk": "high"},
+    )
+    analyses = store.recent_analyses("owner/repo")
+    assert len(analyses) == 1
+    issue = {"number": 10, "title": "similar bug", "html_url": "https://x",
+             "body": "b", "labels": []}
+    inv = investigator_prompt("owner/repo", issue, [], analyses)
+    assert "issue #9" in inv and "NULL keys" in inv
+    ana = analyst_prompt("owner/repo", issue, {}, analyses)
+    assert "issue #9" in ana
+    # Empty history: prompts stay clean, no dangling header.
+    assert "{known_defects}" not in inv
+    assert "Defect families" not in investigator_prompt("owner/repo", issue, [], [])
+
+
+def test_render_comments_caps_context():
+    from app.prompts import render_comments
+    comments = [{"user": {"login": "u"}, "body": f"c{i}"} for i in range(40)]
+    rendered = render_comments(comments)
+    assert "c14" not in rendered and "c39" in rendered
+    assert rendered.count("**u**") == 25

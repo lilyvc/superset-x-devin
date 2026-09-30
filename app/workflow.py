@@ -697,6 +697,7 @@ class WorkflowEngine:
             prompt, title=f"[{role.value}] {workflow['repo']}#{workflow['issue_number']}: {workflow.get('title', '')[:60]}",
             tags=tags, structured_output_schema=schema,
             max_acu_limit=limit if self.settings.max_acu_limit is None else min(limit, self.settings.max_acu_limit),
+            repos=[workflow["repo"]],
         )
         session_url = session.get("url") or (
             f"https://app.devin.ai/sessions/"
@@ -725,7 +726,10 @@ class WorkflowEngine:
             )
         if role == Role.INVESTIGATOR:
             return (
-                investigator_prompt(workflow["repo"], issue, comments),
+                investigator_prompt(
+                    workflow["repo"], issue, comments,
+                    self.store.recent_analyses(workflow["repo"]),
+                ),
                 INVESTIGATION_SCHEMA,
                 self.settings.investigator_acu_limit,
             )
@@ -746,7 +750,10 @@ class WorkflowEngine:
                 self.settings.dedup_acu_limit,
             )
         return (
-            analyst_prompt(workflow["repo"], issue, inv),
+            analyst_prompt(
+                workflow["repo"], issue, inv,
+                self.store.recent_analyses(workflow["repo"]),
+            ),
             ANALYSIS_SCHEMA,
             self.settings.analyst_acu_limit,
         )
