@@ -1,13 +1,14 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>superset-x-devin · operations</title>
+<html lang="en"><head><meta charset="utf-8"><title>Autonomous bug remediation</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <header>
-  <span class="brand">superset-x-devin</span>
-  <span class="sub" id="repo"></span>
+  <div class="brandblock">
+    <span class="brand">Autonomous bug remediation</span>
+    <a class="sub" id="repo" href="#" target="_blank" rel="noopener"></a>
+  </div>
   <span class="grow"></span>
   <span class="muted small"><span class="dot live"></span>updated <span id="updated">–</span></span>
-  <button id="poll">Poll now</button>
 </header>
 <main>
 
@@ -162,7 +163,8 @@ function rowHtml(w){
 }
 async function load(){
   const [m,ws,h]=await Promise.all([fetch('/api/metrics').then(r=>r.json()),fetch('/api/workflows').then(r=>r.json()),fetch('/healthz').then(r=>r.json())]);
-  $('#repo').textContent=h.target_repo+(h.dry_run?' · DRY RUN':'');
+  $('#repo').textContent='target repo: '+h.target_repo;
+  $('#repo').href='https://github.com/'+h.target_repo;
   const e=m.executive||{},c=m.counts||{};
   $('#k-open').textContent=e.issues_open??'–';
   $('#k-open-sub').textContent=`${e.in_progress||0} active · ${e.awaiting_human||0} waiting`;
@@ -174,19 +176,9 @@ async function load(){
   $('#k-fix-sub').textContent=`${c.READY_FOR_REVIEW||0} ready · ${c.COMPLETED||0} merged`;
   $('#acu-total').textContent=(+m.total_acus).toFixed(1);
   ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
-  $('#worklist').innerHTML=ws.map(rowHtml).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</div>';
+  $('#worklist').innerHTML=ws.map(rowHtml).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo and it will be picked up automatically.</div>';
   $('#updated').textContent=new Date().toLocaleTimeString();
 }
-$('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='Polling…';
-  try{
-    let r=await fetch('/admin/poll-now',{method:'POST',headers:{Authorization:'Bearer '+(sessionStorage.adminToken||'')}});
-    if(r.status===401||r.status===503){
-      const t=prompt('Admin token (ADMIN_TOKEN) required for manual polling:');
-      if(t){sessionStorage.adminToken=t;r=await fetch('/admin/poll-now',{method:'POST',headers:{Authorization:'Bearer '+t}})}
-    }
-    if(!r.ok)console.error('poll-now failed',r.status);
-    await load()
-  }finally{b.disabled=false;b.textContent='Poll now'}};
 $('#worklist').addEventListener('click',e=>{
   const head=e.target.closest('.wl-head');
   if(!head||e.target.closest('a'))return;

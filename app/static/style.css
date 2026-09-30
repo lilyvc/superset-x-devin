@@ -13,8 +13,11 @@
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--sans)}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 header{display:flex;align-items:center;gap:14px;padding:14px 28px;border-bottom:1px solid var(--line);background:var(--bg)}
-header .brand{font-weight:600;font-size:14px;letter-spacing:.02em}
-header .sub{color:var(--muted);font-size:13px}header .grow{flex:1}
+header .brandblock{display:flex;flex-direction:column;gap:1px}
+header .brand{font-weight:650;font-size:17px;letter-spacing:.01em}
+header .sub{color:var(--muted);font-size:13px;text-decoration:none}
+header .sub:hover{color:var(--accent);text-decoration:underline}
+header .grow{flex:1}
 button{background:var(--fg);color:var(--bg);border:0;border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;cursor:pointer;font-family:var(--sans)}
 button:disabled{opacity:.5;cursor:wait}
 main{padding:28px;max-width:1180px;margin:0 auto}
