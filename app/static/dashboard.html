@@ -109,14 +109,31 @@ function humanNeeded(w){
   if(w.state==='BLOCKED'||w.state==='ESCALATED')return 'Maintainer';
   return '<span class="muted">—</span>';
 }
-const STEPSEQ=['DISCOVERED','TRIAGING','QUEUED','INVESTIGATING','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW'];
+const MILESTONES=[
+  ['Discovered',['DISCOVERED']],
+  ['Triage',['TRIAGING','QUEUED']],
+  ['Investigate',['INVESTIGATING']],
+  ['Reproduced',['REPRODUCED']],
+  ['Root cause',['ROOT_CAUSE_FOUND']],
+  ['Fix',['REMEDIATING','VERIFYING']],
+  ['PR opened',['PR_OPENED']],
+  ['CI checks',['CI_CHECKING']],
+  ['Ready for review',['READY_FOR_REVIEW']],
+];
 const BADSTATES={NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1,SKIPPED:1};
 function stepsHtml(w){
   const reached=new Set(w.reached||[]);reached.add(w.state);
-  let html=STEPSEQ.map(s=>`<div class="step ${s===w.state?'now':reached.has(s)?'done':''}">${s.replace(/_/g,' ')}</div>`).join('');
-  if(BADSTATES[w.state]||w.state==='NEEDS_INFO'||w.state==='COMPLETED')
-    html+=`<div class="step ${BADSTATES[w.state]?'bad':w.state==='COMPLETED'?'done':'now'}" style="flex:1">${w.state.replace(/_/g,' ')}${w.failure_reason?': '+esc(w.failure_reason):''}</div>`;
-  return html;
+  const cur=MILESTONES.findIndex(([,ss])=>ss.includes(w.state));
+  const lis=MILESTONES.map(([label,ss],i)=>{
+    const done=cur===-1?ss.some(s=>reached.has(s)):i<cur;
+    const cls=i===cur?'now':done?'done':'';
+    return `<li class="${cls}"><span class="mk">${i===cur?'●':done?'✓':'○'}</span>${label}</li>`;
+  });
+  if(cur===-1){
+    const bad=!!BADSTATES[w.state];
+    lis.push(`<li class="${w.state==='COMPLETED'?'done':bad?'bad':'now'}"><span class="mk">${w.state==='COMPLETED'?'✓':bad?'✗':w.state==='NEEDS_INFO'?'?':'●'}</span>${w.state.replace(/_/g,' ').toLowerCase()}${w.failure_reason?': '+esc(w.failure_reason):''}</li>`);
+  }
+  return lis.join('');
 }
 function renderProof(w){
   const inv=w.investigation||{},rem=w.remediation||{};
@@ -163,7 +180,7 @@ async function load(){
         <span class="wl-state">${outcome(w)}<span class="muted small">${waiting}</span></span>
       </div>
       <div class="wl-body">
-        <div class="steps">${stepsHtml(w)}</div>
+        <ul class="milestones">${stepsHtml(w)}</ul>
         <div class="wl-meta small muted">${evidence(w)}${human==='<span class="muted">—</span>'?'':' · needs '+human.toLowerCase()}</div>
         <div class="small" style="margin-top:6px"><a href="/issues/${n}">Open details →</a>${w.pr_url?` &nbsp;·&nbsp; <a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()} →</a>`:''}</div>
       </div>
