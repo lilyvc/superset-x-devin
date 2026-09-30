@@ -8,6 +8,8 @@
 - The CI gate checks GitHub results before it marks a PR ready for review.
 - The duplicate gate checks open PRs before it starts remediation.
 - Human replies can resume an active session or start a recovery session.
+- Comments on a tracked PR — conversation, review comments, and review bodies — reach the Remediator session, or resume it when finished.
+- Once a fix PR exists, the Retro Devin analyses the defect family and files follow-up issues. Devin-discovered issues never get a retro of their own, so follow-ups cannot recurse.
 - Admin requests and webhooks use bearer-token and signature checks.
 - ACU limits, issue provenance, the executive dashboard, and the architecture split are implemented.
 - Workflow uniqueness, webhook delivery IDs, and session fingerprints support idempotent processing.

@@ -68,7 +68,7 @@ Use a fine-grained personal access token with these repository permissions:
 - Checks: read.
 - Commit statuses: read.
 
-The service reads issues, comments, PRs, PR files, check runs, and commit statuses.
+The service reads issues, comments, PRs, PR files, PR review comments and reviews, check runs, and commit statuses.
 It writes issue comments. Devin creates the PR work in the target repository.
 A classic token for a private repository needs the broad `repo` scope.
 Protect the token as a production credential.
@@ -124,10 +124,10 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `CI_REQUIRED` | `true` | Requires GitHub checks before `READY_FOR_REVIEW` |
 | `CI_TIMEOUT_SECONDS` | `14400` | Records a timeout after this CI wait |
 | `SESSION_STALL_SECONDS` | `5400` | Nudges a stalled session; escalation occurs at twice this value |
-| `ANALYSIS_ENABLED` | `true` | Starts an Analyst session when eligible |
+| `ANALYSIS_ENABLED` | `true` | Starts a Retro Devin session once a fix PR exists |
 | `INVESTIGATOR_ACU_LIMIT` | `10` | ACU cap for an Investigator session |
 | `REMEDIATOR_ACU_LIMIT` | `25` | ACU cap for a Remediator session |
-| `ANALYST_ACU_LIMIT` | `8` | ACU cap for an Analyst session |
+| `ANALYST_ACU_LIMIT` | `8` | ACU cap for a Retro Devin session |
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose uses `/data/orchestrator.db` |
 | `ENABLE_POLLING` | `false` | Starts periodic GitHub polling |
 | `GITHUB_POLL_INTERVAL_SECONDS` | `30` | Delay between polling ticks |
