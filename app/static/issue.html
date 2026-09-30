@@ -4,6 +4,7 @@
 <body>
 <header><a href="/">← Dashboard</a><h1 id="title">Issue</h1><span class="sub" id="state"></span><span class="grow"></span><span class="muted small" id="updated"></span></header>
 <main>
+  <div class="card" id="provenance" style="display:none;margin-bottom:14px"></div>
   <div class="steps" id="steps"></div>
   <div class="grid g3">
     <div class="card"><h2>Issue</h2><div id="issue"></div></div>
@@ -35,6 +36,17 @@ async function load(){
   const w=await fetch(`/api/workflows/${h.target_repo}/${number}`).then(r=>{if(!r.ok)throw new Error('not found');return r.json()});
   $('#title').textContent=`#${w.issue_number} ${w.title||''}`;
   $('#state').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>`;
+  const devinFiled=w.origin==='DEVIN_DISCOVERED';
+  const rows=[];
+  if(devinFiled){
+    rows.push(`<div><span class="origin devin">✦ Devin-discovered</span> — a related defect found while investigating ${w.parent?`<a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number} ${esc(w.parent.title||'')}</a>`:'another issue'}</div>`);
+  }else{
+    rows.push('<div><span class="origin">● Reported</span> — opened by a human reporter</div>');
+  }
+  (w.children||[]).forEach(c=>{
+    rows.push(`<div class="small" style="margin-left:18px">└ <span class="origin devin">✦ related defect discovered</span> <a href="/issues/${c.issue_number}">#${c.issue_number} ${esc(c.title||'')}</a> <span class="pill ${c.state}">${c.state.replace(/_/g,' ')}</span></div>`);
+  });
+  if(rows.length){$('#provenance').style.display='';$('#provenance').innerHTML=rows.join('');}
   const reached=new Set(w.events.map(e=>e.to_state));reached.add(w.state);
   $('#steps').innerHTML=STEPS.map(s=>`<div class="step ${s===w.state?'now':reached.has(s)?'done':''}">${s.replace(/_/g,' ')}</div>`).join('')+(BAD[w.state]||w.state==='NEEDS_INFO'||w.state==='COMPLETED'?`<div class="step ${BAD[w.state]?'bad':w.state==='COMPLETED'?'done':'now'}" style="grid-column:span 10">${w.state.replace(/_/g,' ')}${w.failure_reason?': '+esc(w.failure_reason):''}</div>`:'');
   $('#issue').innerHTML=kv([['Repo',esc(w.repo)],['Issue',`<a href="${esc(w.issue_url)}" target="_blank">${esc(w.issue_url)}</a>`],['Author',esc(w.author)],['Labels',(w.labels||[]).map(l=>`<span class="pill">${esc(l)}</span>`).join(' ')],['Discovered',fmt(w.discovered_at)],['Triage started',fmt(w.triaged_started_at)],['Investigation started',fmt(w.started_at)],['Reproduced',fmt(w.reproduced_at)],['Root cause',fmt(w.root_cause_at)],['Remediation started',fmt(w.remediation_started_at)],['PR opened',fmt(w.pr_opened_at)],['Completed',fmt(w.completed_at)]]);

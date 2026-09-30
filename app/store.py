@@ -91,6 +91,12 @@ class Store:
                     at TEXT NOT NULL, kind TEXT NOT NULL, from_state TEXT,
                     to_state TEXT, detail TEXT
                 );
+                CREATE TABLE IF NOT EXISTS issue_origins (
+                    repo TEXT NOT NULL, issue_number INTEGER NOT NULL,
+                    origin TEXT NOT NULL, parent_issue_number INTEGER,
+                    session_id TEXT, created_at TEXT NOT NULL,
+                    PRIMARY KEY (repo, issue_number)
+                );
                 """
             )
             self._ensure_columns(conn, "sessions", {
@@ -102,6 +108,9 @@ class Store:
                 "triage": "TEXT", "triaged_started_at": "TEXT",
                 "ci_status": "TEXT", "ci_checked_at": "TEXT",
                 "ci_timeout_notified": "INTEGER DEFAULT 0",
+                "origin": "TEXT DEFAULT 'HUMAN_REPORTED'",
+                "parent_issue_number": "INTEGER",
+                "discovered_by_session_id": "TEXT",
             })
 
     @staticmethod
@@ -281,3 +290,39 @@ class Store:
             row = conn.execute("SELECT * FROM issues WHERE repo=? AND issue_number=?",
                                (repo, issue_number)).fetchone()
         return dict(row) if row else None
+
+    def record_issue_origin(self, repo: str, issue_number: int, origin: str,
+                            parent_issue_number: int | None = None,
+                            session_id: str | None = None) -> None:
+        """Provenance for an issue before intake discovers it (e.g. an Analyst
+        files a follow-up issue; discovery later stamps it DEVIN_DISCOVERED)."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO issue_origins VALUES (?,?,?,?,?,?)",
+                (repo, issue_number, origin, parent_issue_number, session_id, utcnow()),
+            )
+        # If the workflow already exists, stamp it now.
+        workflow = self.get_workflow(repo, issue_number)
+        if workflow and workflow.get("origin") != origin:
+            self.set_state(workflow["id"], workflow["state"], origin=origin,
+                           parent_issue_number=parent_issue_number,
+                           discovered_by_session_id=session_id)
+
+
+    def get_issue_origin(self, repo: str, issue_number: int) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM issue_origins WHERE repo=? AND issue_number=?",
+                (repo, issue_number),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def children_of(self, repo: str, issue_number: int) -> list[dict]:
+        """Workflows that were discovered by (as follow-ups of) this issue."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM workflows WHERE repo=? AND parent_issue_number=? "
+                "ORDER BY discovered_at, id",
+                (repo, issue_number),
+            ).fetchall()
+        return [_decode(r, JSON_WORKFLOW_FIELDS) for r in rows]

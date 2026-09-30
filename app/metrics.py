@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
-from .states import ACTIVE_STATES, FUNNEL, State
+from .states import ACTIVE_STATES, FUNNEL, Origin, State
 
 
 def _dt(value):
@@ -64,8 +64,20 @@ def metrics(store, settings) -> dict:
             age = now - opened
             opened_24h += age <= timedelta(days=1)
             opened_7d += age <= timedelta(days=7)
+    verified = sum(r["state"] in {State.READY_FOR_REVIEW.value, State.COMPLETED.value}
+                   for r in rows)
+    defects_discovered = sum(
+        r.get("origin") == Origin.DEVIN_DISCOVERED.value for r in rows)
     return {
         "counts": states, "groups": groups, "queue_depth": groups["backlog"],
+        "executive": {
+            "bugs_handled": len(rows),
+            "verified_fixes": verified,
+            "median_time_to_fix": _duration(rows, "pr_opened_at"),
+            "needs_human": groups["waiting_for_human"],
+            "defects_discovered": defects_discovered,
+            "acus_per_verified_fix": total_acus / verified if verified else None,
+        },
         "active_sessions": store.count_active_sessions(), "max_concurrent": settings.max_concurrent_devins,
         "utilization": store.count_active_sessions() / settings.max_concurrent_devins
         if settings.max_concurrent_devins else 0, "funnel": funnel,

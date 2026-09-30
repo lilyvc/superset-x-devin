@@ -3,60 +3,157 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <header>
-  <span class="dot live" id="live"></span>
-  <h1>Autonomous Engineering Remediation</h1>
+  <span class="brand">superset-x-devin</span>
   <span class="sub" id="repo"></span>
   <span class="grow"></span>
-  <span class="muted small" id="updated"></span>
+  <span class="muted small"><span class="dot live"></span>updated <span id="updated">–</span></span>
   <button id="poll">Poll now</button>
 </header>
 <main>
-  <div class="grid g7">
-    <div class="card kpi"><h2>Discovered</h2><div class="v" id="k-discovered">–</div><div class="d" id="k-triaging">–</div></div>
-    <div class="card kpi"><h2>Queued</h2><div class="v" id="k-backlog">–</div><div class="d" id="k-skipped">–</div></div>
-    <div class="card kpi"><h2>Active</h2><div class="v" id="k-active">–</div><div class="d" id="k-util">–</div></div>
-    <div class="card kpi"><h2>Waiting for human</h2><div class="v" id="k-waiting">–</div><div class="d">clarification / blocked</div></div>
-    <div class="card kpi"><h2>PRs ready</h2><div class="v" id="k-prs">–</div><div class="d" id="k-ci">–</div></div>
-    <div class="card kpi"><h2>Completed</h2><div class="v" id="k-done">–</div><div class="d" id="k-notrepro">–</div></div>
-    <div class="card kpi"><h2>Failed / blocked</h2><div class="v" id="k-failed">–</div><div class="d" id="k-acus">–</div></div>
+  <div class="hero">
+    <div class="eyebrow">Autonomous engineering remediation</div>
+    <h1>Turns incoming bug reports into reproduced, verified fixes.</h1>
+    <p>Triages, reproduces, root-causes and fixes defects autonomously — escalating only when human judgment is required.</p>
   </div>
 
-  <section class="grid g2">
-    <div class="card">
-      <h2>Live work</h2>
-      <table><thead><tr><th>Issue</th><th>State</th><th>Stage age</th><th>Sessions</th><th>PR</th></tr></thead><tbody id="rows"></tbody></table>
-    </div>
-    <div>
-      <div class="card funnel"><h2>Funnel</h2><div id="funnel"></div></div>
-      <div class="card" style="margin-top:12px"><h2>Delivery</h2>
-        <table class="small"><tbody id="delivery"></tbody></table>
-      </div>
-    </div>
+  <div class="grid g4">
+    <div class="card kpi"><h2>Bugs handled</h2><div class="v" id="k-handled">–</div><div class="d" id="k-discovered-sub">–</div></div>
+    <div class="card kpi"><h2>Verified fixes</h2><div class="v" id="k-fixes">–</div><div class="d" id="k-ci">–</div></div>
+    <div class="card kpi"><h2>Median time to fix</h2><div class="v" id="k-ttf">–</div><div class="d">issue → verified PR</div></div>
+    <div class="card kpi"><h2>Needs human</h2><div class="v" id="k-human">–</div><div class="d">blocked / clarification</div></div>
+  </div>
+
+  <section class="card">
+    <h2>Autonomous work</h2>
+    <table><thead><tr><th>Issue</th><th>Outcome</th><th>Evidence</th><th>Human needed</th></tr></thead>
+    <tbody id="rows"></tbody></table>
   </section>
 
-  <section class="card"><h2>Pipeline lanes</h2><div id="lanes"></div></section>
+  <section class="proof" id="proof" style="display:none">
+    <div class="kicker">Latest autonomous fix</div>
+    <h3 id="p-title"></h3>
+    <dl>
+      <dt>Impact</dt><dd id="p-impact"></dd>
+      <dt>Devin found</dt><dd id="p-found"></dd>
+      <dt>Fix</dt><dd id="p-fix"></dd>
+    </dl>
+    <ul class="checks" id="p-checks"></ul>
+    <div id="p-links" style="margin-top:14px"></div>
+  </section>
+
+  <details class="ops"><summary>Operations</summary>
+    <div class="inner">
+      <section class="grid g3">
+        <div class="card"><h2>Pipeline</h2>
+          <table class="small"><tbody id="ops-pipe"></tbody></table>
+        </div>
+        <div class="card"><h2>Delivery</h2>
+          <table class="small"><tbody id="delivery"></tbody></table>
+        </div>
+        <div class="card"><h2>Sessions &amp; cost</h2>
+          <table class="small"><tbody id="ops-cost"></tbody></table>
+        </div>
+      </section>
+      <section class="grid g2">
+        <div class="card funnel"><h2>Funnel</h2><div id="funnel"></div></div>
+        <div class="card"><h2>State counts</h2><table class="small"><tbody id="ops-states"></tbody></table></div>
+      </section>
+      <section class="card"><h2>Pipeline lanes</h2><div id="lanes"></div></section>
+    </div>
+  </details>
+
+  <p class="foot">The goal isn’t to maximize the number of autonomous PRs — it’s to minimize the engineer attention required to turn a bug report into a trustworthy fix.</p>
 </main>
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ORDER=['QUEUED','DISCOVERED','TRIAGING','SKIPPED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW','COMPLETED','NOT_REPRODUCIBLE','BLOCKED','FAILED','ESCALATED'];
 const LANES=[['Discovered',['DISCOVERED']],['Triaging',['TRIAGING']],['Queued',['QUEUED']],['Investigating',['INVESTIGATING']],['Waiting for human',['NEEDS_INFO','BLOCKED']],['Root cause found',['REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR open / CI',['PR_OPENED','CI_CHECKING']],['Ready for review',['READY_FOR_REVIEW']],['Completed',['COMPLETED']],['Skipped by triage',['SKIPPED']],['Closed out',['NOT_REPRODUCIBLE','FAILED','ESCALATED']]];
+const OUTCOME={
+  READY_FOR_REVIEW:['Fix ready','READY_FOR_REVIEW'],COMPLETED:['Merged','COMPLETED'],
+  CI_CHECKING:['PR open · CI','CI_CHECKING'],PR_OPENED:['PR open','READY_FOR_REVIEW'],
+  REMEDIATING:['Fixing','REMEDIATING'],VERIFYING:['Verifying','REMEDIATING'],
+  INVESTIGATING:['Investigating','INVESTIGATING'],
+  REPRODUCED:['Reproduced','REPRODUCED'],ROOT_CAUSE_FOUND:['Root cause found','REPRODUCED'],
+  NEEDS_INFO:['Waiting','NEEDS_INFO'],BLOCKED:['Needs attention','BLOCKED'],
+  SKIPPED:['Skipped','SKIPPED'],NOT_REPRODUCIBLE:['Not reproducible','NOT_REPRODUCIBLE'],
+  FAILED:['Failed','FAILED'],ESCALATED:['Escalated','ESCALATED'],
+  TRIAGING:['Triaging','TRIAGING'],QUEUED:['Queued','QUEUED'],DISCOVERED:['New','DISCOVERED'],
+};
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}
-function ago(iso){return iso?dur((Date.now()-new Date(iso))/1000):'–'}
-function stageStart(w){return w.waiting_since||w.pr_opened_at||w.remediation_started_at||w.root_cause_at||w.reproduced_at||w.started_at||w.discovered_at}
 let repo='';
+function originTag(w){
+  if(w.origin==='DEVIN_DISCOVERED')
+    return `<span class="origin devin" title="Filed by Devin while investigating ${w.parent_issue_number?'#'+w.parent_issue_number:'another defect'}">✦ Devin${w.parent_issue_number?` · from <a href="/issues/${w.parent_issue_number}">#${w.parent_issue_number}</a>`:''}</span>`;
+  return '<span class="origin" title="Opened by a human reporter">● reported</span>';
+}
+function outcome(w){
+  const [label,cls]=OUTCOME[w.state]||[w.state,''];
+  return `<span class="pill ${cls}">${label}</span>`;
+}
+function evidence(w){
+  const pr=w.pr_url?`PR <a href="${esc(w.pr_url)}" target="_blank">#${w.pr_url.split('/').pop()}</a>`:null;
+  const bits=[];
+  if(w.reproduced_at)bits.push('Reproduced');
+  if(w.root_cause_at)bits.push('Root cause');
+  if(pr)bits.push(pr);
+  if(w.ci_status==='passed')bits.push('CI green');
+  else if(w.ci_status&&w.ci_status!=='skipped')bits.push(`CI ${w.ci_status}`);
+  if(bits.length)return bits.join(' → ');
+  if(w.state==='SKIPPED'||w.state==='NOT_REPRODUCIBLE')return `<span class="muted">${esc(w.failure_reason||w.needs_info_kind||'–')}</span>`;
+  if(w.state==='NEEDS_INFO'||w.state==='BLOCKED')return `<span class="muted">${esc(w.failure_reason||'waiting for an answer')}</span>`;
+  if(w.failure_reason)return `<span class="muted">${esc(w.failure_reason)}</span>`;
+  return '<span class="muted">–</span>';
+}
+function humanNeeded(w){
+  if(w.state==='NEEDS_INFO')return 'Reporter';
+  if(w.state==='BLOCKED'||w.state==='ESCALATED')return 'Maintainer';
+  return '<span class="muted">—</span>';
+}
+function renderProof(w){
+  const inv=w.investigation||{},rem=w.remediation||{};
+  $('#proof').style.display='';
+  $('#p-title').innerHTML=`<a href="/issues/${w.issue_number}">#${w.issue_number} ${esc(w.title||'')}</a>`;
+  $('#p-impact').textContent=inv.observed_behavior||inv.summary||'–';
+  $('#p-found').textContent=inv.root_cause||'–';
+  $('#p-fix').textContent=rem.fix_summary||rem.summary||'–';
+  const checks=[
+    ['Original failure reproduced',!!inv.reproduced],
+    [`Regression tests added${(rem.regression_tests_added||[]).length?` (${rem.regression_tests_added.length})`:''}`,!!(rem.regression_tests_added||[]).length],
+    ['Original reproduction now passes',!!rem.reproduction_rerun_passed],
+    ['Verification passed',!!rem.verification_passed],
+    ['PR opened',!!w.pr_url],
+    w.ci_status==='passed'?['CI checks green',true]:['CI checks '+((w.ci_status)||'pending'),null],
+  ];
+  $('#p-checks').innerHTML=checks.map(([t,v])=>`<li class="${v===true?'':v===false?'fail':'pending'}">${v===true?'✓':v===false?'✗':'◌'} ${esc(t)}</li>`).join('');
+  const links=[];
+  if(w.pr_url)links.push(`<a href="${esc(w.pr_url)}" target="_blank">View PR →</a>`);
+  links.push(`<a href="/issues/${w.issue_number}">View investigation →</a>`);
+  const ana=w.sessions?.find(s=>s.role==='analyst');
+  if(ana?.url)links.push(`<a href="${esc(ana.url)}" target="_blank">View analysis →</a>`);
+  $('#p-links').innerHTML=links.join('&nbsp;&nbsp;');
+}
 async function load(){
   const [m,ws,h]=await Promise.all([fetch('/api/metrics').then(r=>r.json()),fetch('/api/workflows').then(r=>r.json()),fetch('/healthz').then(r=>r.json())]);
   repo=h.target_repo;$('#repo').textContent=repo+(h.dry_run?' · DRY RUN':'');
-  const g=m.groups;
-  $('#k-discovered').textContent=g.discovered;$('#k-triaging').textContent=`${g.triaging} triaging now`;
-  $('#k-backlog').textContent=m.counts.QUEUED;$('#k-skipped').textContent=`${g.skipped} skipped by triage`;
-  $('#k-active').textContent=g.active;
-  $('#k-util').textContent=`${m.active_sessions}/${m.max_concurrent} Devin sessions (${Math.round(m.utilization*100)}%)`;
-  $('#k-waiting').textContent=g.waiting_for_human;$('#k-prs').textContent=g.prs_ready;$('#k-done').textContent=g.completed;
+  const e=m.executive||{},g=m.groups;
+  $('#k-handled').textContent=e.bugs_handled??'–';
+  $('#k-discovered-sub').textContent=e.defects_discovered?`${e.defects_discovered} defects auto-discovered`:`${g.skipped} skipped without cost`;
+  $('#k-fixes').textContent=e.verified_fixes??'–';
   $('#k-ci').textContent=`${g.ci_pending||0} awaiting CI`;
-  $('#k-notrepro').textContent=`${g.not_reproducible} not reproducible`;$('#k-failed').textContent=g.blocked_failed;
-  $('#k-acus').textContent=`${m.total_acus.toFixed(1)} ACUs total`;
+  $('#k-ttf').textContent=dur(e.median_time_to_fix);
+  $('#k-human').textContent=e.needs_human??'–';
+  ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
+  $('#rows').innerHTML=ws.map(w=>{
+    const n=w.issue_number;
+    const waiting=w.waiting_for_seconds!=null?` <span class="muted small">waiting ${dur(w.waiting_for_seconds)}</span>`:'';
+    return `<tr><td><a href="/issues/${n}"><b>#${n}</b></a> ${esc(w.title||'')}<br>${originTag(w)}</td><td>${outcome(w)}${waiting}</td><td class="small">${evidence(w)}</td><td>${humanNeeded(w)}</td></tr>`;
+  }).join('')||'<tr><td colspan="4" class="muted">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</td></tr>';
+  const latest=ws.filter(w=>w.pr_url).sort((a,b)=>(b.pr_opened_at||'').localeCompare(a.pr_opened_at||''))[0];
+  if(latest){
+    fetch(`/api/workflows/${repo}/${latest.issue_number}`).then(r=>r.ok?r.json():null).then(d=>{if(d)renderProof(d)}).catch(()=>{});
+  }else{$('#proof').style.display='none'}
+  // Operations
   const max=Math.max(1,...Object.values(m.funnel));
   $('#funnel').innerHTML=Object.entries(m.funnel).map(([k,v])=>`<div class="row"><span>${esc(k)}</span><div class="bar"><i style="width:${v/max*100}%"></i></div><b>${v}</b></div>`).join('');
   const md=m.medians,r=m.rates,t=m.throughput;
@@ -71,18 +168,22 @@ async function load(){
     ['Verified-fix rate',Math.round(r.verified_fix_rate*100)+'%'],
     ['Needs-info rate',Math.round(r.needs_info_rate*100)+'%'],
     ['Triage skip rate',Math.round(r.triage_skip_rate*100)+'%'],
-    ['ACUs per completed PR',m.acus_per_completed_pr.toFixed(1)],
   ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
-  ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
-  $('#rows').innerHTML=ws.map(w=>{
-    const n=w.issue_number,href=`/issues/${n}`;
-    const sess=w.sessions.map(s=>`<a class="mono" href="${esc(s.url)}" target="_blank" title="${esc(s.status||'')}">${esc(s.role)}${s.acus?` · ${(+s.acus).toFixed(1)}`:''}</a>`).join('<br>');
-    const waiting=w.waiting_for_seconds!=null?` <span class="muted small">waiting ${dur(w.waiting_for_seconds)}</span>`:'';
-    const ci=w.ci_status?`<br><span class="muted small">CI: ${esc(w.ci_status)}</span>`:'';
-    return `<tr><td><a href="${href}"><b>#${n}</b></a> <span class="muted small">${esc(w.title||'')}</span></td><td><span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>${waiting}</td><td class="muted">${ago(stageStart(w))}</td><td>${sess||'<span class="muted">–</span>'}</td><td>${w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()}</a>${ci}`:'<span class="muted">–</span>'}</td></tr>`;
-  }).join('')||'<tr><td colspan="5" class="muted">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</td></tr>';
+  $('#ops-cost').innerHTML=[
+    ['Active Devin sessions',`${m.active_sessions} / ${m.max_concurrent} (${Math.round(m.utilization*100)}%)`],
+    ['Total ACUs',m.total_acus.toFixed(1)],
+    ['ACUs per completed PR',m.acus_per_completed_pr.toFixed(1)],
+    ['ACUs per verified fix',e.acus_per_verified_fix==null?'–':(+e.acus_per_verified_fix).toFixed(1)],
+  ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
+  $('#ops-pipe').innerHTML=[
+    ['Discovered',g.discovered],['Queued',m.counts.QUEUED],['Actively working',g.active],
+    ['Waiting for human',g.waiting_for_human],['Awaiting CI',g.ci_pending||0],
+    ['Skipped / filtered',g.skipped],['Completed',g.completed],
+    ['Blocked / failed',g.blocked_failed],['Not reproducible',g.not_reproducible],
+  ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
+  $('#ops-states').innerHTML=Object.entries(m.counts).filter(([,v])=>v).map(([k,v])=>`<tr><td><span class="pill ${k}">${k.replace(/_/g,' ')}</span></td><td><b>${v}</b></td></tr>`).join('');
   $('#lanes').innerHTML=LANES.map(([name,states])=>{const items=ws.filter(w=>states.includes(w.state));return `<div class="lane"><h3>${name} <span class="muted">${items.length}</span></h3><div class="items">${items.map(w=>`<a class="chip" href="/issues/${w.issue_number}">#${w.issue_number} <span class="muted">${esc((w.title||'').slice(0,48))}</span></a>`).join('')||'<span class="muted small">—</span>'}</div></div>`}).join('');
-  $('#updated').textContent='updated '+new Date().toLocaleTimeString();
+  $('#updated').textContent=new Date().toLocaleTimeString();
 }
 $('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='Polling…';
   try{

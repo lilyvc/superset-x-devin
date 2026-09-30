@@ -61,6 +61,13 @@ class NeedsInfoKind(str, Enum):
     ENVIRONMENT = "NEEDS_ENVIRONMENT_INFO"
 
 
+# Where a tracked issue came from: opened by a human reporter vs filed by the
+# system itself (e.g. an Analyst follow-up issue about a related defect).
+class Origin(str, Enum):
+    HUMAN_REPORTED = "HUMAN_REPORTED"
+    DEVIN_DISCOVERED = "DEVIN_DISCOVERED"
+
+
 # Reasons the triage step can reject an issue without spending investigation ACUs.
 class SkipReason(str, Enum):
     NOT_ENGINEERING = "NOT_ENGINEERING"

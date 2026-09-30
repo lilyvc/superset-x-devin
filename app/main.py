@@ -114,7 +114,9 @@ async def list_workflows(request: Request):
                                         "reproduced_at", "root_cause_at",
                                         "remediation_started_at", "pr_opened_at",
                                         "completed_at", "waiting_since", "pr_url",
-                                        "ci_status", "updated_at")}
+                                        "ci_status", "updated_at", "origin",
+                                        "parent_issue_number", "failure_reason",
+                                        "needs_info_kind")}
         if row["state"] in {"NEEDS_INFO", "BLOCKED"} and row.get("waiting_since"):
             item["waiting_for_seconds"] = (now - datetime.fromisoformat(row["waiting_since"])).total_seconds()
         else:
@@ -130,7 +132,18 @@ async def workflow_detail(repo_owner: str, repo: str, number: int, request: Requ
     row = store.get_workflow(f"{repo_owner}/{repo}", number)
     if not row:
         raise HTTPException(status_code=404, detail="workflow not found")
-    return {**row, "events": store.get_events(row["id"]), "sessions": store.get_sessions(row["id"])}
+    parent = (store.get_workflow(f"{repo_owner}/{repo}", row["parent_issue_number"])
+              if row.get("parent_issue_number") else None)
+    children = [
+        {"issue_number": c["issue_number"], "title": c["title"], "state": c["state"],
+         "issue_url": c["issue_url"]}
+        for c in store.children_of(f"{repo_owner}/{repo}", number)
+    ]
+    return {**row, "events": store.get_events(row["id"]),
+            "sessions": store.get_sessions(row["id"]), "children": children,
+            "parent": ({"issue_number": parent["issue_number"], "title": parent["title"],
+                        "state": parent["state"], "issue_url": parent["issue_url"]}
+                       if parent else None)}
 
 
 @app.get("/api/metrics")

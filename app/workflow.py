@@ -24,7 +24,7 @@ from .prompts import (
     skip_comment,
     triage_prompt,
 )
-from .states import ACTIVE_STATES, TERMINAL_STATES, Role, SkipReason, State
+from .states import ACTIVE_STATES, TERMINAL_STATES, Origin, Role, SkipReason, State
 from .store import Store, utcnow
 
 logger = logging.getLogger("workflow")
@@ -108,6 +108,16 @@ def _ci_verdict(data: dict) -> tuple[str, list[str]]:
 
 
 # Matches explicit fix references in PR bodies/titles: "fixes #54", "close #54", ...
+_ISSUE_URL_RE = re.compile(r"/issues/(\d+)(?:[^0-9]|$)")
+
+
+def _issue_number_from_url(url: str | None) -> int | None:
+    if not url:
+        return None
+    match = _ISSUE_URL_RE.search(url)
+    return int(match.group(1)) if match else None
+
+
 _FIX_LINK_RE = re.compile(r"(?:fix(?:e[sd])?|fixing|close[sd]?|closing|resolve[sd]?|resolving)"
                           r"[:\s]+#?(\d+)", re.IGNORECASE)
 
@@ -223,12 +233,17 @@ class WorkflowEngine:
             if admitted >= self.settings.max_new_issues_per_poll:
                 break
             admitted += 1
+            provenance = self.store.get_issue_origin(
+                self.settings.target_repo, issue["number"])
             workflow = self.store.upsert_workflow(
                 self.settings.target_repo, issue["number"], title=issue.get("title", ""),
                 issue_url=issue.get("html_url", ""),
                 author=(issue.get("user") or {}).get("login", ""),
                 labels=list(_labels(issue)), state=State.DISCOVERED.value,
                 discovered_at=utcnow(),
+                origin=(provenance or {}).get("origin", Origin.HUMAN_REPORTED.value),
+                parent_issue_number=(provenance or {}).get("parent_issue_number"),
+                discovered_by_session_id=(provenance or {}).get("session_id"),
             )
             filtered = self._intake_filter(issue)
             if filtered:
@@ -604,6 +619,13 @@ class WorkflowEngine:
 
     async def _handle_analyst(self, row, workflow, out, fp):
         self.store.set_state(workflow["id"], workflow["state"], analysis=out)
+        followup_number = _issue_number_from_url(out.get("followup_issue_url"))
+        if followup_number:
+            self.store.record_issue_origin(
+                workflow["repo"], followup_number, Origin.DEVIN_DISCOVERED.value,
+                parent_issue_number=workflow["issue_number"],
+                session_id=row["session_id"],
+            )
         await self._comment(workflow, f"**Engineering analysis**\n\n"
                             f"Systemic risk: {out.get('systemic_risk', 'unknown')}\n\n"
                             f"{out.get('summary', '')}\n\n"

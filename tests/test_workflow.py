@@ -547,3 +547,41 @@ def test_validate_skills_fails_when_missing(tmp_path):
     import pytest as _pytest
     with _pytest.raises(RuntimeError):
         validate_skills(tmp_path)
+
+
+def test_issue_origin_propagates_to_workflow(tmp_path):
+    settings = _settings(tmp_path)
+    github = FakeGitHub([_issue(1), _issue(2, title="related defect")])
+    store = Store(settings.db_path)
+    store.record_issue_origin("owner/repo", 2, "DEVIN_DISCOVERED",
+                            parent_issue_number=1, session_id="sess-ana")
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    asyncio.run(engine.tick())
+    child = store.get_workflow("owner/repo", 2)
+    assert child["origin"] == "DEVIN_DISCOVERED"
+    assert child["parent_issue_number"] == 1
+    assert child["discovered_by_session_id"] == "sess-ana"
+    assert store.get_workflow("owner/repo", 1)["origin"] == "HUMAN_REPORTED"
+    assert [c["issue_number"] for c in store.children_of("owner/repo", 1)] == [2]
+
+
+def test_analyst_followup_records_issue_origin(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), DevinClient(""))
+    workflow = store.upsert_workflow("owner/repo", 1, title="bug", state="REMEDIATING")
+    row = {"session_id": "sess-ana", "url": "https://app.devin.ai/x"}
+    out = {"systemic_risk": "low", "summary": "s", "recommended_followup": "FILE",
+           "followup_issue_url": "https://github.com/owner/repo/issues/77"}
+    asyncio.run(engine._handle_analyst(row, workflow, out, "fp"))
+    origin = store.get_issue_origin("owner/repo", 77)
+    assert origin["origin"] == "DEVIN_DISCOVERED"
+    assert origin["parent_issue_number"] == 1
+    assert origin["session_id"] == "sess-ana"
+
+
+def test_issue_number_from_url():
+    from app.workflow import _issue_number_from_url
+    assert _issue_number_from_url("https://github.com/o/r/issues/42") == 42
+    assert _issue_number_from_url("https://github.com/o/r/pull/7") is None
+    assert _issue_number_from_url(None) is None
