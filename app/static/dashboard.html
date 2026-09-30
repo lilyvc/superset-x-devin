@@ -51,6 +51,11 @@ function outcome(w){
   const [label,cls]=OUTCOME[w.state]||[w.state,''];
   return `<span class="pill ${cls}">${label}</span>`;
 }
+function inputLink(w){
+  if(!['NEEDS_INFO','BLOCKED'].includes(w.state))return '';
+  const url=w.pr_url&&['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW'].includes(w.state)?w.pr_url:w.issue_url;
+  return url?` <a class="inputlink" href="${esc(url)}" target="_blank" onclick="event.stopPropagation()" title="reply where input is needed">↗</a>`:'';
+}
 function prBadge(w){
   if(!w.pr_url)return '';
   const n=w.pr_url.split('/').pop();
@@ -144,8 +149,8 @@ function rowHtml(w){
   return `<div class="wl-item${OPEN.has(n)?' open':''}" data-n="${n}">
     <div class="wl-head">
       <span class="caret">▸</span>
-      <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>issue #${n}</b></a> ${esc(w.title||'')} ${originTag(w)} ${prBadge(w)}</span>
-      <span class="wl-state">${outcome(w)}<span class="muted small">${waiting}</span></span>
+      <span class="wl-title"><a href="${esc(w.issue_url||'#')}" target="_blank" onclick="event.stopPropagation()"><b>issue #${n}</b></a> ${esc(w.title||'')} ${originTag(w)} ${prBadge(w)}</span>
+      <span class="wl-state">${outcome(w)}${inputLink(w)}<span class="muted small">${waiting}</span></span>
     </div>
     <div class="wl-body">
       ${stepsHtml(w)}

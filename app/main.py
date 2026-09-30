@@ -117,7 +117,7 @@ async def list_workflows(request: Request):
     result = []
     for row in store.list_workflows():
         item = {k: row.get(k) for k in ("id", "repo", "issue_number", "title", "state",
-                                        "discovered_at", "triaged_started_at",
+                                        "issue_url", "discovered_at", "triaged_started_at",
                                         "started_at", "investigated_at",
                                         "reproduced_at", "root_cause_at",
                                         "remediation_started_at", "pr_opened_at",
