@@ -129,7 +129,7 @@ function stepsHtml(w){
 function sessionsHtml(w){
   const ss=(w.sessions||[]);
   if(!ss.length)return '';
-  const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
+  const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Retro',dedup:'Dedup check'};
   const roleOrder={triage:0,investigator:1,dedup:2,remediator:3,analyst:4};
   const sorted=[...ss].sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9));
   const real=/(?:devin-)?[0-9a-f]{32}/;

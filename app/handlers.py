@@ -238,14 +238,19 @@ async def handle_analyst(engine: WorkflowEngine, s: SettledSession) -> None:
     engine.store.set_state(workflow["id"], workflow["state"], analysis=out)
     followup_number = issue_number_from_url(out.get("followup_issue_url"))
     if followup_number:
-        engine.store.record_issue_origin(
-            workflow["repo"], followup_number, Origin.DEVIN_DISCOVERED.value,
-            parent_issue_number=workflow["issue_number"],
-            session_id=row["session_id"],
+        already_known = (
+            engine.store.get_issue_origin(workflow["repo"], followup_number)
+            or engine.store.get_workflow(workflow["repo"], followup_number)
         )
+        if not already_known:
+            engine.store.record_issue_origin(
+                workflow["repo"], followup_number, Origin.DEVIN_DISCOVERED.value,
+                parent_issue_number=workflow["issue_number"],
+                session_id=row["session_id"],
+            )
     await engine.comment(
         workflow,
-        f"**Engineering analysis**\n\n"
+        f"**Retro Devin — defect-family analysis**\n\n"
         f"Systemic risk: {out.get('systemic_risk', 'unknown')}\n\n"
         f"{out.get('summary', '')}\n\n"
         f"Recommended follow-up: {out.get('recommended_followup', '')}\n"

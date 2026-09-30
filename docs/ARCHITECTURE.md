@@ -80,7 +80,7 @@ The dispatcher uses this order:
 | Order | Role | Condition |
 |---:|---|---|
 | 1 | Remediator | Investigation reached `ROOT_CAUSE_FOUND`; the duplicate gate is clear |
-| 2 | Analyst | `ANALYSIS_ENABLED=true`; state is `PR_OPENED`, `CI_CHECKING`, `READY_FOR_REVIEW`, or `COMPLETED` — defect-family analysis only runs once a fix PR exists, so failed remediations cost no analyst ACUs |
+| 2 | Analyst (Retro Devin) | `ANALYSIS_ENABLED=true`; state is `PR_OPENED`, `CI_CHECKING`, `READY_FOR_REVIEW`, or `COMPLETED` — defect-family analysis only runs once a fix PR exists, so failed remediations cost no analyst ACUs |
 | 3 | Investigator | Workflow state is `QUEUED` |
 | 4 | Triage | Workflow state is `DISCOVERED` and `TRIAGE_ENABLED=true` |
 
@@ -97,7 +97,7 @@ After `SESSION_STALL_SECONDS`, the engine nudges a stalled session once. At twic
 | Investigator | Reproduces an issue and reports root-cause evidence |
 | Remediator | Changes code, runs tests, and reports PR verification |
 | Dedup | Checks whether a candidate open PR already fixes the issue |
-| Analyst | Reports related issues and engineering risks |
+| Analyst (Retro Devin) | Reports related issues and engineering risks |
 
 ### Intake and triage
 
@@ -168,7 +168,7 @@ The same bot and self filters as issue replies apply.
 
 The `issue_origins` table records each issue's origin, parent issue number, Devin session ID, and creation time.
 The workflow row stores `origin`, `parent_issue_number`, and `discovered_by_session_id`.
-When an Analyst records a follow-up issue, the engine links it to the parent workflow and session.
+When the Retro Devin records a follow-up issue, the engine links it to the parent workflow and session. Issues with `DEVIN_DISCOVERED` provenance never get a retro of their own, so follow-ups cannot recurse into more follow-ups. An origin is recorded only when the follow-up issue is not already tracked.
 The poller later discovers the issue and applies the stored provenance.
 The dashboard marks human-reported issues and Devin-discovered issues.
 The issue page shows parent and child links.

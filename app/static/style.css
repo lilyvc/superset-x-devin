@@ -98,6 +98,8 @@ pre{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10
 .st-label{white-space:nowrap}
 .st-note{font-weight:400;color:var(--muted);font-size:12px}
 .milestones li.bad .st-note{color:var(--bad)}
+.milestones li.pre-retro::before{background:none;border-left:1.5px dashed var(--line);width:0}
+.milestones li.retro .mk{border-style:dashed}
 .sesslist{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
 .sesslist .sess{font-weight:600}
 details.ops{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}

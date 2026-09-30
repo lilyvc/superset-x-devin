@@ -616,12 +616,14 @@ class WorkflowEngine:
                     break
                 # Defect-family analysis only runs once a fix PR exists —
                 # investigations/remediations that never produce one aren't
-                # worth the ACUs.
-                if workflow["state"] in {s.value for s in
-                                         {State.PR_OPENED, State.CI_CHECKING,
-                                          State.READY_FOR_REVIEW, State.COMPLETED}} and not self.store.get_sessions(
-                                              workflow["id"], Role.ANALYST
-                                          ):
+                # worth the ACUs. Devin-discovered issues never get a retro
+                # of their own, so follow-ups can't recurse into more
+                # follow-ups.
+                if (workflow["state"] in {s.value for s in
+                                          {State.PR_OPENED, State.CI_CHECKING,
+                                           State.READY_FOR_REVIEW, State.COMPLETED}}
+                        and workflow.get("origin") != Origin.DEVIN_DISCOVERED.value
+                        and not self.store.get_sessions(workflow["id"], Role.ANALYST)):
                     await self._create_role_session(workflow, Role.ANALYST)
                     capacity -= 1
         for workflow in workflows:
