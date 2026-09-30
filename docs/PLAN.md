@@ -1,6 +1,6 @@
-This document uses ASD-STE100 Simplified Technical English.
-
 # Plan
+
+_This document uses ASD-STE100 Simplified Technical English._
 
 ## Status
 

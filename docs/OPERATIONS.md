@@ -1,6 +1,6 @@
-This document uses ASD-STE100 Simplified Technical English.
-
 # Operations
+
+_This document uses ASD-STE100 Simplified Technical English._
 
 ## Requirements
 

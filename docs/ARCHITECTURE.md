@@ -1,6 +1,6 @@
-This document uses ASD-STE100 Simplified Technical English.
-
 # Architecture
+
+_This document uses ASD-STE100 Simplified Technical English._
 
 ## Control plane and engineering plane
 
