@@ -69,6 +69,9 @@ class DevinClient:
                     "tests_executed": [{"command": "dry-run", "result": "passed"}],
                     "verification_evidence": ["Dry-run evidence"], "summary": "Dry-run remediation",
                 }
+            elif role == "dedup":
+                output = {"verdict": "PROCEED", "duplicate_pr_url": None,
+                          "rationale": "Dry-run dedup verdict"}
             else:
                 output = {"systemic_risk": "none", "summary": "Dry-run analysis",
                           "recommended_followup": "NONE", "followup_issue_url": None}
@@ -91,6 +94,8 @@ class DevinClient:
     async def send_message(self, session_id: str, message: str) -> dict | None:
         if session_id in self._dry_sessions:
             return {"ok": True}
+        if self._dry_run:
+            raise RuntimeError(f"unknown session {session_id}: cannot resume")
         name = "messages" if self._v3 else "message"
         resp = await self._client.post(
             f"{self._base}/sessions/{session_id}/{name}", json={"message": message}

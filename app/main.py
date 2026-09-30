@@ -17,6 +17,7 @@ from .devin_client import DevinClient
 from .github_client import GitHubClient
 from .metrics import metrics
 from .poller import run_poller
+from .prompts import validate_skills
 from .store import Store
 from .workflow import WorkflowEngine
 
@@ -27,6 +28,9 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail fast if the role-procedure skills are not packaged with the app
+    # (e.g. a Docker image built before skills/ was added to the Dockerfile).
+    validate_skills()
     store = Store(settings.db_path)
     github = GitHubClient(settings.github_token, settings.github_api_url)
     devin = DevinClient("" if settings.dry_run else settings.devin_api_key,
@@ -64,7 +68,7 @@ async def issue_page(number: int):
 
 def verify_signature(secret: str, body: bytes, signature_header: str | None) -> bool:
     if not secret:
-        return True
+        return False  # fail closed: unsigned webhooks are never acceptable
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -78,6 +82,13 @@ async def healthz():
 
 @app.post("/admin/poll-now")
 async def poll_now(request: Request):
+    if not settings.admin_token:
+        raise HTTPException(
+            status_code=503,
+            detail="admin endpoints disabled — set ADMIN_TOKEN to enable them",
+        )
+    if request.headers.get("authorization") != f"Bearer {settings.admin_token}":
+        raise HTTPException(status_code=401, detail="unauthorized")
     async with request.app.state.tick_lock:
         await request.app.state.engine.tick()
     return {"workflows": len(request.app.state.store.list_workflows()),
@@ -102,7 +113,8 @@ async def list_workflows(request: Request):
                                         "started_at", "investigated_at",
                                         "reproduced_at", "root_cause_at",
                                         "remediation_started_at", "pr_opened_at",
-                                        "completed_at", "waiting_since", "pr_url", "updated_at")}
+                                        "completed_at", "waiting_since", "pr_url",
+                                        "ci_status", "updated_at")}
         if row["state"] in {"NEEDS_INFO", "BLOCKED"} and row.get("waiting_since"):
             item["waiting_for_seconds"] = (now - datetime.fromisoformat(row["waiting_since"])).total_seconds()
         else:
@@ -129,6 +141,13 @@ async def api_metrics(request: Request):
 @app.post("/webhooks/github")
 async def github_webhook(request: Request):
     body = await request.body()
+    if not settings.github_webhook_secret:
+        # Fail closed: an unsigned endpoint must not silently accept forged
+        # events. Use ENABLE_POLLING or configure GITHUB_WEBHOOK_SECRET.
+        raise HTTPException(
+            status_code=503,
+            detail="GITHUB_WEBHOOK_SECRET not configured; webhook intake disabled",
+        )
     if not verify_signature(settings.github_webhook_secret, body,
                             request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(status_code=401, detail="bad signature")

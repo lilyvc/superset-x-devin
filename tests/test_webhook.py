@@ -16,5 +16,7 @@ def test_verify_signature_rejects_bad():
     assert not verify_signature("s3cret", b"{}", None)
 
 
-def test_verify_signature_open_when_no_secret():
-    assert verify_signature("", b"{}", None)
+def test_verify_signature_fails_closed_when_no_secret():
+    # With no secret configured the webhook endpoint returns 503 before this
+    # is reached; the function itself must still never accept unsigned input.
+    assert not verify_signature("", b"{}", None)

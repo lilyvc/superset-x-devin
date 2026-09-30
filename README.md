@@ -41,12 +41,24 @@ DISCOVERED --> TRIAGING --+--> SKIPPED (not engineering / duplicate / invalid)
                                       v
                               ROOT_CAUSE_FOUND
                                       |
+                              dedup gate (open-PR scan,
+                              optional Dedup Devin verdict)
+                                      |
+                                      +--> SKIPPED (DUPLICATE -- an open PR
+                                      |            already fixes this)
+                                      +--> BLOCKED (ambiguous -- needs a human)
+                                      |
                                       +--> REMEDIATING --> VERIFYING
                                                         |       |
                                                         |       +--> FAILED
                                                         |
                                                         v
                                                     PR_OPENED
+                                                        |
+                                                        v
+                                                  CI_CHECKING
+                                              (the PR's real GitHub
+                                               checks must pass)
                                                         |
                                                         v
                                                  READY_FOR_REVIEW
@@ -77,7 +89,14 @@ admitted issue straight to the Investigator without a triage verdict.
 
 `NEEDS_INFO` is a waiting loop, not a failure; `BLOCKED` is the equivalent for
 remediation. A PR closed without merging becomes `FAILED`; a closed target
-issue in `PR_OPENED` or `READY_FOR_REVIEW` becomes `COMPLETED`.
+issue in `PR_OPENED`, `CI_CHECKING`, or `READY_FOR_REVIEW` becomes `COMPLETED`.
+
+Two different things are called "discovery" and are named explicitly:
+
+- **Issue intake discovery** — the poller/webhook path that discovers open
+  GitHub issues and admits them as `DISCOVERED` workflows.
+- **Related-defect discovery** — the Analyst's job after a fix: finding similar
+  code locations and related defects worth follow-up issues.
 
 ## 2. Architecture
 
@@ -108,9 +127,9 @@ structured evidence; it does not directly choose workflow transitions.
 
 ## 3. Devin roles and success gates
 
-Four independent session roles keep intake, investigation, implementation, and
-follow-up analysis separate. The schemas in `app/prompts.py` are the contracts
-stored with each workflow.
+Five independent session roles keep intake, investigation, implementation,
+duplicate screening, and follow-up analysis separate. The schemas in
+`app/prompts.py` are the contracts stored with each workflow.
 
 ### Triage
 
@@ -159,9 +178,32 @@ Python's `verification_gate` accepts only when:
 2. `tests_executed` is non-empty and every result is `"passed"`.
 3. A PR URL is present, either in `pr_url` or the session's `pull_requests`.
 
-Passing moves through `PR_OPENED` to `READY_FOR_REVIEW`. Failed verification
-can be sent back to the same session for another attempt, up to
+Passing moves the workflow to `PR_OPENED` and then `CI_CHECKING`. Failed
+verification can be sent back to the same session for another attempt, up to
 `MAX_REMEDIATION_ATTEMPTS`; exhausting attempts enters `FAILED`.
+
+`READY_FOR_REVIEW` is independently verified, not self-reported: once the
+Remediator's contract passes, the engine polls the PR's head SHA against
+GitHub's check-runs and commit-status APIs every tick. The workflow only
+reaches `READY_FOR_REVIEW` when the checks are green; failing checks post one
+comment naming them and stay in `CI_CHECKING`, and a PR with no checks at all
+shows `ci_status: unverified` on the dashboard and issue API rather than an
+implied green result. `CI_TIMEOUT_SECONDS` (default 4h) bounds the wait and
+records a `ci_timeout` event. Set `CI_REQUIRED=false` only for targets without
+CI — the gate is then skipped and `ci_status` shows `skipped` honestly.
+
+### Dedup gate
+
+Before a Remediator session is dispatched, a cheap reconciliation step scans
+the repository's open PRs (no Devin session). A PR whose title or body contains
+a closing reference to the issue (`fixes #N`, `closes #N`, ...) is a definitive
+duplicate: the workflow goes `SKIPPED` with reason `DUPLICATE` and a comment
+citing the existing PR, so overlapping fix PRs are never opened twice. When the
+match is only plausible — shared terms between the issue/root cause and a PR's
+title/body — a small Dedup Devin session (`DEDUP_ACU_LIMIT`, default 3 ACUs)
+adjudicates with the candidate PRs' changed-file lists: `DUPLICATE` skips the
+workflow, `PROCEED` clears the gate, and `UNSURE` goes `BLOCKED` for a human.
+Set `DEDUP_ENABLED=false` to bypass the gate entirely.
 
 ### Analyst
 
@@ -187,13 +229,21 @@ reply into the **same** Investigator session, clears the wait, and resumes.
 
 The same pattern applies to a waiting Remediator, except its workflow state is
 `BLOCKED` until the active session receives the answer. If a blocked workflow
-has no active session, the reply is not silently lost: the engine records a
-`human_comment_unforwarded` event and leaves the state unchanged.
+has no active session, the reply is still delivered: the engine first tries to
+resume the last Investigator/Remediator/Dedup session (messaging a settled
+Devin session wakes it, preserving its context). When resumption fails — the
+session expired or was deleted — a fresh same-role session is started with a
+`## Recovery context` block carrying the original blocker, the human's
+question, and the answer, and a `human_reply_recovery_session` event is
+recorded.
 
 ## 5. Idempotency, concurrency, and restart safety
 
-- `MAX_CONCURRENT_DEVINS` caps active Investigator, Remediator, and Analyst
-  sessions together; the default is `3`.
+- `MAX_CONCURRENT_DEVINS` caps active Investigator, Remediator, Dedup, and
+  Analyst sessions together; the default is `3`.
+- `MAX_TOTAL_ACUS` is an organization-level budget ceiling: once the ACUs
+  recorded across all sessions reach it, no new Devin sessions are dispatched
+  (existing ones keep running; a `budget_exceeded` event is recorded once).
 - Persisted role sessions gate dispatch, so an active role is not duplicated;
   Devin creation also sends `idempotent: true`.
 - SQLite stores session IDs, roles, URLs, status, ACUs, outputs, fingerprints,
@@ -205,12 +255,14 @@ has no active session, the reply is not silently lost: the engine records a
 ## 6. Dashboard and APIs
 
 Open `/` for KPI cards (discovered/triaging, queued/skipped, active, waiting,
-PRs, completion, failures, ACUs, utilization), a live workflow table with stage
-age/session/PR links, an intake funnel (discovered → triaged → actionable →
-investigated → …), delivery metrics including triage skip rate and
-discovered→triage latency, and a lock-guarded `Poll now` button. Pipeline lanes
-distinguish `DISCOVERED`, `TRIAGING`, `QUEUED`, `INVESTIGATING`, waiting for
-human, remediation, PR ready, completed, and `SKIPPED`.
+PRs ready with an awaiting-CI count, completion, failures, ACUs, utilization),
+a live workflow table with stage age/session/PR links and per-PR CI status, an
+intake funnel (discovered → triaged → actionable → investigated → …), delivery
+metrics including triage skip rate and discovered→triage latency, and a
+lock-guarded `Poll now` button (which sends `ADMIN_TOKEN` when configured).
+Pipeline lanes distinguish `DISCOVERED`, `TRIAGING`, `QUEUED`, `INVESTIGATING`,
+waiting for human, remediation, `PR_OPENED`/`CI_CHECKING`, `READY_FOR_REVIEW`,
+completed, and `SKIPPED`.
 
 Open `/issues/{n}` for lifecycle steps, issue metadata, Devin sessions,
 outcome, triage verdict, investigation/remediation/analysis outputs, and the
@@ -224,8 +276,8 @@ The JSON and operational endpoints are:
 | `GET /api/workflows` | Workflow list with timestamps, waiting duration, PR, and session summaries |
 | `GET /api/workflows/{owner}/{repo}/{n}` | Full workflow, events, sessions, and structured outputs |
 | `GET /healthz` | Health response with target repository and dry-run flag |
-| `POST /admin/poll-now` | Run one serialized workflow tick and return counts |
-| `POST /webhooks/github` | Signed GitHub `issues` and `issue_comment` intake |
+| `POST /admin/poll-now` | Run one serialized workflow tick; requires `Authorization: Bearer $ADMIN_TOKEN` when set, and returns 503 when it is not |
+| `POST /webhooks/github` | Signed GitHub `issues` and `issue_comment` intake; returns 503 when `GITHUB_WEBHOOK_SECRET` is unset |
 
 All dashboard values come from persisted SQLite workflow, session, and event
 data. There is no sample or hard-coded dashboard data.
@@ -278,10 +330,10 @@ Run serialized ticks and open the dashboard (the first tick discovers and
 triages, the second starts the Investigator):
 
 ```bash
-curl -X POST http://localhost:8000/admin/poll-now
-curl -X POST http://localhost:8000/admin/poll-now
-curl -X POST http://localhost:8000/admin/poll-now
-curl -X POST http://localhost:8000/admin/poll-now
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
 open http://localhost:8000
 ```
 
@@ -313,6 +365,12 @@ GitHub comment writes while keeping the same state-machine path.
 | `MAX_REMEDIATION_ATTEMPTS` | `2` | Maximum verification retries for a Remediator |
 | `ANALYSIS_ENABLED` | `true` | Dispatch the Analyst role after investigation |
 | `INVESTIGATOR_ACU_LIMIT` / `REMEDIATOR_ACU_LIMIT` / `ANALYST_ACU_LIMIT` | `10` / `25` / `8` | Per-role session ACU limits |
+| `DEDUP_ENABLED` | `true` | Scan open PRs for duplicates before dispatching a Remediator |
+| `DEDUP_ACU_LIMIT` | `3` | ACU cap for the Dedup adjudication session |
+| `CI_REQUIRED` | `true` | Require the fix PR's GitHub checks to pass before `READY_FOR_REVIEW` |
+| `CI_TIMEOUT_SECONDS` | `14400` | Bound on the CI wait; records `ci_timeout` and keeps `CI_CHECKING` |
+| `ADMIN_TOKEN` | empty | Bearer token for `POST /admin/poll-now`; required for that endpoint |
+| `MAX_TOTAL_ACUS` | unset | Organization-level ACU budget ceiling across all sessions |
 | `REMEDIATION_LABEL` | empty | Legacy orchestrator label setting; the active engine records `remediation_started_at` |
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose overrides it to `/data/orchestrator.db` |
 | `ENABLE_POLLING` | `false` | Start the GitHub poller and run a startup tick |
@@ -329,10 +387,11 @@ The client normalizes both response shapes.
    shows `DISCOVERED` → `TRIAGING` → `QUEUED` → `INVESTIGATING` with the triage
    verdict and session links (non-actionable issues land in `SKIPPED` or
    `NEEDS_INFO` instead).
-3. Investigator Devin posts reproduction/root-cause evidence; the workflow
-   enters `REMEDIATING`, and Remediator Devin opens a PR with tests.
-4. Python validates the contract, shows the PR/evidence in `READY_FOR_REVIEW`,
-   and PR reconciliation reaches `COMPLETED` after merge.
+3. Investigator Devin posts reproduction/root-cause evidence; the dedup gate
+   scans open PRs, then Remediator Devin opens a PR with tests.
+4. Python validates the contract, waits for the PR's GitHub checks in
+   `CI_CHECKING`, and shows the verified PR in `READY_FOR_REVIEW`; PR
+   reconciliation reaches `COMPLETED` after merge.
 
 For a vague issue, Investigator enters `NEEDS_INFO` and posts one question.
 Reply on the issue; polling forwards the answer to the same session.
@@ -341,8 +400,11 @@ Reply on the issue; polling forwards the answer to the same session.
 
 - Structured output feeds deterministic gates; creation uses `idempotent: true`.
 - Roles have separate prompts, schemas, tags, titles, and ACU limits; human
-  answers return to the same session.
-- Both `skills/*.md` playbooks are injected into prompts.
+  answers return to the same session, or to a fresh recovery session when the
+  original cannot be resumed.
+- Both `skills/*.md` playbooks are injected into prompts; they are copied into
+  the image (`COPY skills ./skills`) and `validate_skills()` fails startup if
+  either is missing, rather than silently degrading prompts.
 - Investigator and Remediator prompts direct browser/computer use for UI bugs
   and require screenshot/recording evidence where appropriate.
 
@@ -354,8 +416,9 @@ Reply on the issue; polling forwards the answer to the same session.
   sufficient at the current scale.
 - **Auto-merge:** PRs remain visible for engineering review.
 - **Multi-repository fan-out:** each process has one `TARGET_REPO`.
-- **Dashboard authentication:** deploy the service behind your own network,
-  proxy, or access-control layer.
+- **Read-side dashboard authentication:** `POST /admin/poll-now` requires
+  `ADMIN_TOKEN`, but dashboard GETs are still unauthenticated — deploy behind
+  your own network, proxy, or access-control layer.
 
 ## 11. Known risks and limits
 
@@ -388,8 +451,9 @@ Dockerfile  docker-compose.yml  .env.example
 
 ## 13. Security notes
 
-- Configure `GITHUB_WEBHOOK_SECRET`; signed requests use `X-Hub-Signature-256`.
-  Without a secret, verification is intentionally open for local development.
+- `GITHUB_WEBHOOK_SECRET` is required for webhook intake: verification fails
+  closed, and `POST /webhooks/github` returns 503 while it is unset instead of
+  accepting unsigned requests.
 - Only `issues`, `issue_comment`, and `ping` webhook paths are handled.
 - Scope GitHub and Devin credentials to the target repository/session needs;
   protect them like production credentials. Never commit `.env`, tokens,

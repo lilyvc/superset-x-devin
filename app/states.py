@@ -15,7 +15,10 @@ class State(str, Enum):
     ROOT_CAUSE_FOUND = "ROOT_CAUSE_FOUND"
     REMEDIATING = "REMEDIATING"
     VERIFYING = "VERIFYING"
+    # PR opened and agent-verified; waiting on the PR's actual GitHub checks.
     PR_OPENED = "PR_OPENED"
+    CI_CHECKING = "CI_CHECKING"
+    # Only reached once CI on the PR is green (or CI_REQUIRED=false).
     READY_FOR_REVIEW = "READY_FOR_REVIEW"
     COMPLETED = "COMPLETED"
     NOT_REPRODUCIBLE = "NOT_REPRODUCIBLE"
@@ -48,6 +51,7 @@ class Role(str, Enum):
     INVESTIGATOR = "investigator"
     REMEDIATOR = "remediator"
     ANALYST = "analyst"
+    DEDUP = "dedup"
 
 
 class NeedsInfoKind(str, Enum):
@@ -73,20 +77,22 @@ FUNNEL = [
     ("Discovered", None),
     ("Triaged", {State.SKIPPED, State.QUEUED, State.NEEDS_INFO, State.INVESTIGATING, State.REPRODUCED,
                  State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING, State.PR_OPENED,
-                 State.READY_FOR_REVIEW, State.COMPLETED, State.NOT_REPRODUCIBLE, State.BLOCKED,
-                 State.FAILED, State.ESCALATED}),
+                 State.CI_CHECKING, State.READY_FOR_REVIEW, State.COMPLETED,
+                 State.NOT_REPRODUCIBLE, State.BLOCKED, State.FAILED, State.ESCALATED}),
     ("Actionable", {State.QUEUED, State.NEEDS_INFO, State.INVESTIGATING, State.REPRODUCED,
                     State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING, State.PR_OPENED,
-                    State.READY_FOR_REVIEW, State.COMPLETED, State.NOT_REPRODUCIBLE, State.BLOCKED,
-                    State.FAILED, State.ESCALATED}),
+                    State.CI_CHECKING, State.READY_FOR_REVIEW, State.COMPLETED,
+                    State.NOT_REPRODUCIBLE, State.BLOCKED, State.FAILED, State.ESCALATED}),
     ("Investigated", {State.INVESTIGATING, State.NEEDS_INFO, State.REPRODUCED, State.ROOT_CAUSE_FOUND,
-                      State.REMEDIATING, State.VERIFYING, State.PR_OPENED, State.READY_FOR_REVIEW,
-                      State.COMPLETED, State.NOT_REPRODUCIBLE}),
+                      State.REMEDIATING, State.VERIFYING, State.PR_OPENED, State.CI_CHECKING,
+                      State.READY_FOR_REVIEW, State.COMPLETED, State.NOT_REPRODUCIBLE}),
     ("Reproduced", {State.REPRODUCED, State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING,
-                    State.PR_OPENED, State.READY_FOR_REVIEW, State.COMPLETED}),
-    ("Fix attempted", {State.REMEDIATING, State.VERIFYING, State.PR_OPENED, State.READY_FOR_REVIEW,
-                       State.COMPLETED}),
-    ("Verified", {State.PR_OPENED, State.READY_FOR_REVIEW, State.COMPLETED}),
-    ("PR opened", {State.PR_OPENED, State.READY_FOR_REVIEW, State.COMPLETED}),
+                    State.PR_OPENED, State.CI_CHECKING, State.READY_FOR_REVIEW, State.COMPLETED}),
+    ("Fix attempted", {State.REMEDIATING, State.VERIFYING, State.PR_OPENED, State.CI_CHECKING,
+                       State.READY_FOR_REVIEW, State.COMPLETED}),
+    ("Agent verified", {State.PR_OPENED, State.CI_CHECKING, State.READY_FOR_REVIEW,
+                        State.COMPLETED}),
+    ("PR opened", {State.PR_OPENED, State.CI_CHECKING, State.READY_FOR_REVIEW, State.COMPLETED}),
+    ("CI green", {State.READY_FOR_REVIEW, State.COMPLETED}),
     ("Ready for review", {State.READY_FOR_REVIEW, State.COMPLETED}),
 ]

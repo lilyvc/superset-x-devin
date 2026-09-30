@@ -31,9 +31,10 @@ structured-output gates. Intake is autonomous: no trigger label is required.
 
 ## Remaining follow-ups
 
-- [ ] **Duplicate detection across issues** — give triage a persisted index of
-      prior workflows so `DUPLICATE` verdicts can cite the earlier issue
-      reliably instead of relying on a single session's search.
+- [ ] **Cross-issue duplicate detection** — the pre-remediation gate already
+      reconciles against open PRs (`_dedup_gate` in `app/workflow.py`), but
+      triage `DUPLICATE` verdicts still can't reliably cite an earlier *issue*;
+      give triage a persisted index of prior workflows.
 - [ ] **Re-triage on issue edits** — re-evaluate `SKIPPED`/`NEEDS_INFO`
       workflows when the reporter substantially edits the issue body.
 - [ ] **Dashboard authentication** — add an optional auth layer or integrate

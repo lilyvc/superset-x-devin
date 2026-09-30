@@ -62,11 +62,18 @@ def test_verification_gate_each_missing_field(field):
 
 
 class FakeGitHub:
-    def __init__(self, issues):
+    def __init__(self, issues, pulls=None):
         self.issues = issues
+        self.pulls = pulls or []
         self.comments = {i["number"]: [] for i in issues}
         self.posted = []
-        self.pull = {"state": "open", "merged": False}
+        self.pull = {"state": "open", "merged": False, "head": {"sha": "abc123"}}
+        self.checks = {
+            "check_runs": [
+                {"name": "unit tests", "status": "completed", "conclusion": "success"}
+            ],
+            "statuses": [],
+        }
 
     async def list_open_issues(self, repo):
         return self.issues
@@ -76,6 +83,15 @@ class FakeGitHub:
 
     async def get_pull(self, repo, number):
         return self.pull
+
+    async def list_open_pulls(self, repo):
+        return self.pulls
+
+    async def list_pull_files(self, repo, number):
+        return []
+
+    async def get_commit_checks(self, repo, ref):
+        return self.checks
 
     async def list_issue_comments(self, repo, number):
         return self.comments[number]
@@ -317,3 +333,170 @@ def test_concurrency_cap(tmp_path):
     asyncio.run(engine.tick())
     assert store.count_active_sessions() == 2
     assert len(store.get_sessions(store.list_workflows()[0]["id"])) == 1
+
+
+def _run_to_ci_checking(tmp_path, github=None, **settings_kwargs):
+    """Drive the canned dry-run pipeline to the CI gate and return the pieces."""
+    issue = {"number": 1, "title": "Bug", "body": "body",
+             "html_url": "https://github.com/owner/repo/issues/1",
+             "user": {"login": "reporter"}, "labels": []}
+    settings = _settings(tmp_path, **settings_kwargs)
+    github = github or FakeGitHub([issue])
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    return settings, github, store, devin, engine
+
+
+def test_ready_for_review_requires_green_ci(tmp_path):
+    """A failing or absent CI must never surface as ready for review."""
+    github = FakeGitHub([_issue()])
+    github.checks = {"check_runs": [
+        {"name": "unit tests", "status": "completed", "conclusion": "failure"},
+    ], "statuses": []}
+    _, github, store, _, engine = _run_to_ci_checking(tmp_path, github=github)
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.CI_CHECKING.value
+    assert workflow["ci_status"] == "failed"
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
+    assert any("CI checks are failing" in c for c in comments)
+    # A second poll must not re-post the failure comment.
+    count = len(comments)
+    asyncio.run(engine.tick())
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
+    assert len(comments) == count
+    # Green CI then promotes the PR.
+    github.checks = {"check_runs": [
+        {"name": "unit tests", "status": "completed", "conclusion": "success"},
+    ], "statuses": []}
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.READY_FOR_REVIEW.value
+    assert workflow["ci_status"] == "passed"
+
+
+def test_ci_unverified_stays_in_checking(tmp_path):
+    github = FakeGitHub([_issue()])
+    github.checks = {"check_runs": [], "statuses": []}
+    _, _, store, _, _ = _run_to_ci_checking(tmp_path, github=github)
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.CI_CHECKING.value
+    assert workflow["ci_status"] == "unverified"
+
+
+def test_ci_not_required_goes_straight_to_review(tmp_path):
+    github = FakeGitHub([_issue()])
+    _, _, store, _, _ = _run_to_ci_checking(tmp_path, github=github, ci_required=False)
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.READY_FOR_REVIEW.value
+    assert workflow["ci_status"] == "skipped"
+
+
+def test_dedup_skips_when_pr_already_links_issue(tmp_path):
+    pulls = [{"number": 7, "title": "fix: aggregate NULL groups",
+              "body": "## Related issue\nFixes #1",
+              "html_url": "https://github.com/owner/repo/pull/7"}]
+    github = FakeGitHub([_issue()], pulls=pulls)
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.SKIPPED.value
+    assert workflow["needs_info_kind"] == "DUPLICATE"
+    roles = {s["role"] for s in store.get_sessions(workflow["id"])}
+    assert "remediator" not in roles
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
+    assert any("duplicate remediation avoided" in c for c in comments)
+
+
+def test_dedup_ambiguous_pr_uses_dedup_session(tmp_path):
+    pulls = [{"number": 7, "title": "fix dry-run root cause handling",
+              "body": "changes the dry-run root cause code path",
+              "html_url": "https://github.com/owner/repo/pull/7"}]
+    github = FakeGitHub([_issue()], pulls=pulls)
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    roles = {s["role"] for s in store.get_sessions(workflow["id"])}
+    # The ambiguous match spawned a dedup session (dry-run verdict PROCEED),
+    # which then cleared the gate and let the remediator dispatch.
+    assert "dedup" in roles
+    assert "remediator" in roles
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "dedup_candidates" in kinds
+    assert "dedup_cleared" in kinds
+    assert workflow["state"] in (State.ROOT_CAUSE_FOUND.value, State.REMEDIATING.value)
+
+
+def test_blocked_reply_resumes_finished_session(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    store.update_session(session["session_id"], active=0)
+    store.set_state(1, State.BLOCKED, failure_reason="waiting on environment info",
+                    waiting_since="2026-01-01T00:00:00+00:00")
+    github.comments[1].append({"id": 9, "body": "It's Postgres 16",
+                               "user": {"login": "human"}})
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.INVESTIGATING.value
+    assert store.get_session(session["session_id"])["active"] == 1
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "human_reply_resumed_session" in kinds
+    assert "human_comment_unforwarded" not in kinds
+
+
+def test_blocked_reply_recovers_with_fresh_session(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    store.update_session(session["session_id"], active=0)
+    # The session can no longer be resumed (expired/deleted upstream).
+    del devin._dry_sessions[session["session_id"]]
+    store.set_state(1, State.BLOCKED, failure_reason="needed the DB version",
+                    waiting_since="2026-01-01T00:00:00+00:00")
+    github.comments[1].append({"id": 9, "body": "It's Postgres 16",
+                               "user": {"login": "human"}})
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.INVESTIGATING.value
+    sessions = store.get_sessions(1)
+    assert len(sessions) == 2
+    assert sessions[-1]["role"] == "investigator"
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "human_reply_recovery_session" in kinds
+
+
+def test_acu_budget_ceiling_stops_dispatch(tmp_path):
+    settings = _settings(tmp_path, max_total_acus=0)
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), DevinClient(""))
+    asyncio.run(engine.tick())
+    assert store.count_active_sessions() == 0
+    assert store.get_workflow("owner/repo", 1)["state"] == State.QUEUED.value
+
+
+def test_validate_skills_fails_when_missing(tmp_path):
+    from app.prompts import validate_skills
+    assert validate_skills()  # repo skills directory is complete
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError):
+        validate_skills(tmp_path)

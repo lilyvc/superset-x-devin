@@ -16,7 +16,7 @@
     <div class="card kpi"><h2>Queued</h2><div class="v" id="k-backlog">–</div><div class="d" id="k-skipped">–</div></div>
     <div class="card kpi"><h2>Active</h2><div class="v" id="k-active">–</div><div class="d" id="k-util">–</div></div>
     <div class="card kpi"><h2>Waiting for human</h2><div class="v" id="k-waiting">–</div><div class="d">clarification / blocked</div></div>
-    <div class="card kpi"><h2>PRs ready</h2><div class="v" id="k-prs">–</div><div class="d">verified, awaiting review</div></div>
+    <div class="card kpi"><h2>PRs ready</h2><div class="v" id="k-prs">–</div><div class="d" id="k-ci">–</div></div>
     <div class="card kpi"><h2>Completed</h2><div class="v" id="k-done">–</div><div class="d" id="k-notrepro">–</div></div>
     <div class="card kpi"><h2>Failed / blocked</h2><div class="v" id="k-failed">–</div><div class="d" id="k-acus">–</div></div>
   </div>
@@ -39,8 +39,8 @@
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const ORDER=['QUEUED','DISCOVERED','TRIAGING','SKIPPED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','READY_FOR_REVIEW','COMPLETED','NOT_REPRODUCIBLE','BLOCKED','FAILED','ESCALATED'];
-const LANES=[['Discovered',['DISCOVERED']],['Triaging',['TRIAGING']],['Queued',['QUEUED']],['Investigating',['INVESTIGATING']],['Waiting for human',['NEEDS_INFO','BLOCKED']],['Root cause found',['REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR ready',['PR_OPENED','READY_FOR_REVIEW']],['Completed',['COMPLETED']],['Skipped by triage',['SKIPPED']],['Closed out',['NOT_REPRODUCIBLE','FAILED','ESCALATED']]];
+const ORDER=['QUEUED','DISCOVERED','TRIAGING','SKIPPED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW','COMPLETED','NOT_REPRODUCIBLE','BLOCKED','FAILED','ESCALATED'];
+const LANES=[['Discovered',['DISCOVERED']],['Triaging',['TRIAGING']],['Queued',['QUEUED']],['Investigating',['INVESTIGATING']],['Waiting for human',['NEEDS_INFO','BLOCKED']],['Root cause found',['REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR open / CI',['PR_OPENED','CI_CHECKING']],['Ready for review',['READY_FOR_REVIEW']],['Completed',['COMPLETED']],['Skipped by triage',['SKIPPED']],['Closed out',['NOT_REPRODUCIBLE','FAILED','ESCALATED']]];
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}
 function ago(iso){return iso?dur((Date.now()-new Date(iso))/1000):'–'}
 function stageStart(w){return w.waiting_since||w.pr_opened_at||w.remediation_started_at||w.root_cause_at||w.reproduced_at||w.started_at||w.discovered_at}
@@ -54,6 +54,7 @@ async function load(){
   $('#k-active').textContent=g.active;
   $('#k-util').textContent=`${m.active_sessions}/${m.max_concurrent} Devin sessions (${Math.round(m.utilization*100)}%)`;
   $('#k-waiting').textContent=g.waiting_for_human;$('#k-prs').textContent=g.prs_ready;$('#k-done').textContent=g.completed;
+  $('#k-ci').textContent=`${g.ci_pending||0} awaiting CI`;
   $('#k-notrepro').textContent=`${g.not_reproducible} not reproducible`;$('#k-failed').textContent=g.blocked_failed;
   $('#k-acus').textContent=`${m.total_acus.toFixed(1)} ACUs total`;
   const max=Math.max(1,...Object.values(m.funnel));
@@ -77,12 +78,22 @@ async function load(){
     const n=w.issue_number,href=`/issues/${n}`;
     const sess=w.sessions.map(s=>`<a class="mono" href="${esc(s.url)}" target="_blank" title="${esc(s.status||'')}">${esc(s.role)}${s.acus?` · ${(+s.acus).toFixed(1)}`:''}</a>`).join('<br>');
     const waiting=w.waiting_for_seconds!=null?` <span class="muted small">waiting ${dur(w.waiting_for_seconds)}</span>`:'';
-    return `<tr><td><a href="${href}"><b>#${n}</b></a> <span class="muted small">${esc(w.title||'')}</span></td><td><span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>${waiting}</td><td class="muted">${ago(stageStart(w))}</td><td>${sess||'<span class="muted">–</span>'}</td><td>${w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()}</a>`:'<span class="muted">–</span>'}</td></tr>`;
+    const ci=w.ci_status?`<br><span class="muted small">CI: ${esc(w.ci_status)}</span>`:'';
+    return `<tr><td><a href="${href}"><b>#${n}</b></a> <span class="muted small">${esc(w.title||'')}</span></td><td><span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>${waiting}</td><td class="muted">${ago(stageStart(w))}</td><td>${sess||'<span class="muted">–</span>'}</td><td>${w.pr_url?`<a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()}</a>${ci}`:'<span class="muted">–</span>'}</td></tr>`;
   }).join('')||'<tr><td colspan="5" class="muted">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</td></tr>';
   $('#lanes').innerHTML=LANES.map(([name,states])=>{const items=ws.filter(w=>states.includes(w.state));return `<div class="lane"><h3>${name} <span class="muted">${items.length}</span></h3><div class="items">${items.map(w=>`<a class="chip" href="/issues/${w.issue_number}">#${w.issue_number} <span class="muted">${esc((w.title||'').slice(0,48))}</span></a>`).join('')||'<span class="muted small">—</span>'}</div></div>`}).join('');
   $('#updated').textContent='updated '+new Date().toLocaleTimeString();
 }
-$('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='Polling…';try{await fetch('/admin/poll-now',{method:'POST'});await load()}finally{b.disabled=false;b.textContent='Poll now'}};
+$('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='Polling…';
+  try{
+    let r=await fetch('/admin/poll-now',{method:'POST',headers:{Authorization:'Bearer '+(sessionStorage.adminToken||'')}});
+    if(r.status===401||r.status===503){
+      const t=prompt('Admin token (ADMIN_TOKEN) required for manual polling:');
+      if(t){sessionStorage.adminToken=t;r=await fetch('/admin/poll-now',{method:'POST',headers:{Authorization:'Bearer '+t}})}
+    }
+    if(!r.ok)console.error('poll-now failed',r.status);
+    await load()
+  }finally{b.disabled=false;b.textContent='Poll now'}};
 load().catch(console.error);setInterval(()=>load().catch(console.error),5000);
 </script>
 </body></html>

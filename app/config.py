@@ -17,6 +17,10 @@ class Settings:
     github_webhook_secret: str = os.getenv("GITHUB_WEBHOOK_SECRET", "")
     github_api_url: str = os.getenv("GITHUB_API_URL", "https://api.github.com")
 
+    # Bearer token required on /admin/* endpoints. When empty the endpoints are
+    # disabled (503) rather than left open.
+    admin_token: str = os.getenv("ADMIN_TOKEN", "")
+
     devin_api_key: str = os.getenv("DEVIN_API_KEY", "")
     devin_api_base_url: str = os.getenv("DEVIN_API_BASE_URL", "https://api.devin.ai")
     # Set when authenticating with a Personal Access Token (cog_ user PAT):
@@ -64,6 +68,24 @@ class Settings:
 
     max_concurrent_devins: int = int(os.getenv("MAX_CONCURRENT_DEVINS", "3"))
     max_remediation_attempts: int = int(os.getenv("MAX_REMEDIATION_ATTEMPTS", "2"))
+    # Org-level budget ceiling: once recorded sessions have consumed this many
+    # ACUs in total, no new Devin sessions are dispatched. Empty = unlimited.
+    max_total_acus: float | None = (
+        float(os.getenv("MAX_TOTAL_ACUS")) if os.getenv("MAX_TOTAL_ACUS") else None
+    )
+    # Pre-remediation dedup: before dispatching a Remediator, check open PRs for
+    # an existing fix (explicit issue link, or a cheap Dedup Devin verdict on
+    # ambiguous candidates).
+    dedup_enabled: bool = _env_bool("DEDUP_ENABLED", True)
+    dedup_acu_limit: int = int(os.getenv("DEDUP_ACU_LIMIT", "3"))
+    # CI verification gate: a PR is only READY_FOR_REVIEW once the PR's actual
+    # GitHub checks pass. Until then it sits in CI_CHECKING with a visible
+    # ci_status (pending / failed / unverified). Set CI_REQUIRED=false to let
+    # verified fixes go straight to review on repos without CI.
+    ci_required: bool = _env_bool("CI_REQUIRED", True)
+    # After this long in CI_CHECKING a one-time ci_timeout event is recorded so
+    # a stalled pipeline is visible on the issue timeline. 0 = never.
+    ci_timeout_seconds: float = float(os.getenv("CI_TIMEOUT_SECONDS", "14400"))
     analysis_enabled: bool = _env_bool("ANALYSIS_ENABLED", True)
     investigator_acu_limit: int = int(os.getenv("INVESTIGATOR_ACU_LIMIT", "10"))
     remediator_acu_limit: int = int(os.getenv("REMEDIATOR_ACU_LIMIT", "25"))

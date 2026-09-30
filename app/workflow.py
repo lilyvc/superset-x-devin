@@ -12,11 +12,13 @@ from .devin_status import _last_devin_message, _session_state
 from .github_client import GitHubClient
 from .prompts import (
     ANALYSIS_SCHEMA,
+    DEDUP_SCHEMA,
     INVESTIGATION_SCHEMA,
     REMEDIATION_SCHEMA,
     TRIAGE_SCHEMA,
     analyst_prompt,
     clarification_comment,
+    dedup_prompt,
     investigator_prompt,
     remediator_prompt,
     skip_comment,
@@ -70,6 +72,57 @@ def verification_gate(out: dict, pr_url: str | None) -> tuple[bool, list[str]]:
     if not pr_url:
         reasons.append("pr_url is required")
     return not reasons, reasons
+
+
+_FAILING_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled"}
+
+
+def _ci_verdict(data: dict) -> tuple[str, list[str]]:
+    """Aggregate GitHub check-runs + commit statuses into one verdict.
+
+    Returns (verdict, names) where verdict is passed | failed | pending |
+    unverified (no checks configured at all).
+    """
+    runs = data.get("check_runs") or []
+    statuses = data.get("statuses") or []
+    if not runs and not statuses:
+        return "unverified", []
+    failing, pending = [], []
+    for run in runs:
+        name = run.get("name") or "check"
+        if run.get("status") != "completed":
+            pending.append(name)
+        elif run.get("conclusion") in _FAILING_CONCLUSIONS:
+            failing.append(name)
+    for status in statuses:
+        context = status.get("context") or "status"
+        if status.get("state") in {"failure", "error"}:
+            failing.append(context)
+        elif status.get("state") == "pending":
+            pending.append(context)
+    if failing:
+        return "failed", failing
+    if pending:
+        return "pending", pending
+    return "passed", []
+
+
+# Matches explicit fix references in PR bodies/titles: "fixes #54", "close #54", ...
+_FIX_LINK_RE = re.compile(r"(?:fix(?:e[sd])?|fixing|close[sd]?|closing|resolve[sd]?|resolving)"
+                          r"[:\s]+#?(\d+)", re.IGNORECASE)
+
+_STOPWORDS = {
+    "with", "that", "this", "from", "have", "been", "when", "where", "which",
+    "would", "could", "should", "into", "their", "there", "about", "after",
+    "before", "issue", "does", "http", "https", "com", "github",
+}
+
+
+def _tokens(text: str) -> set[str]:
+    return {
+        word for word in re.findall(r"[a-z0-9_./-]{4,}", (text or "").lower())
+        if word not in _STOPWORDS
+    }
 
 
 def _labels(issue: dict) -> set[str]:
@@ -200,7 +253,8 @@ class WorkflowEngine:
                                workflow["issue_number"], exc)
                 continue
             if issue.get("state") == "closed":
-                if workflow["state"] in {State.PR_OPENED.value, State.READY_FOR_REVIEW.value}:
+                if workflow["state"] in {State.PR_OPENED.value, State.CI_CHECKING.value,
+                                        State.READY_FOR_REVIEW.value}:
                     self.store.set_state(workflow["id"], State.COMPLETED, completed_at=utcnow())
                 else:
                     self.store.set_state(
@@ -219,25 +273,78 @@ class WorkflowEngine:
                 )
 
     async def _reconcile_prs(self) -> None:
-        states = {State.PR_OPENED.value, State.READY_FOR_REVIEW.value}
+        states = {State.PR_OPENED.value, State.CI_CHECKING.value,
+                  State.READY_FOR_REVIEW.value}
         for workflow in self.store.list_workflows(states):
             if not workflow.get("pr_number"):
                 continue
             try:
                 pull = await self.github.get_pull(workflow["repo"], workflow["pr_number"])
                 if pull.get("merged"):
-                    self.store.set_state(workflow["id"], State.COMPLETED, completed_at=utcnow())
-                elif pull.get("state") == "closed":
+                    self.store.set_state(workflow["id"], State.COMPLETED,
+                                         completed_at=utcnow())
+                    continue
+                if pull.get("state") == "closed":
                     self.store.set_state(
                         workflow["id"], State.FAILED,
                         failure_reason="PR closed without merge",
                     )
+                    continue
+                if workflow["state"] == State.READY_FOR_REVIEW.value:
+                    continue
+                if self.settings.ci_required:
+                    await self._reconcile_ci(workflow, pull)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("could not reconcile PR #%s: %s", workflow["pr_number"], exc)
                 self.store.add_event(
                     workflow["id"], "error",
                     detail=f"pull request reconciliation: {exc}",
                 )
+
+    async def _reconcile_ci(self, workflow: dict, pull: dict) -> None:
+        """Independent CI gate: READY_FOR_REVIEW only when the PR's actual
+        GitHub checks are green — the Remediator's own verification claim is
+        necessary but not sufficient."""
+        head = (pull.get("head") or {}).get("sha")
+        if not head:
+            return
+        data = await self.github.get_commit_checks(workflow["repo"], head)
+        verdict, names = _ci_verdict(data)
+        previous = workflow.get("ci_status")
+        now = utcnow()
+        if verdict == "passed":
+            self.store.set_state(workflow["id"], State.READY_FOR_REVIEW,
+                                 ci_status="passed", ci_checked_at=now)
+            await self._comment(
+                workflow,
+                f"**CI checks passed** — fix ready for review: {workflow.get('pr_url')}",
+            )
+            return
+        opened = _parse_dt(workflow.get("pr_opened_at"))
+        timed_out = (
+            opened is not None
+            and self.settings.ci_timeout_seconds > 0
+            and (_now_ts() - opened).total_seconds() > self.settings.ci_timeout_seconds
+        )
+        if timed_out and not workflow.get("ci_timeout_notified"):
+            self.store.set_state(workflow["id"], workflow["state"], ci_status=verdict,
+                                 ci_checked_at=now, ci_timeout_notified=1)
+            self.store.add_event(
+                workflow["id"], "ci_timeout",
+                detail=f"CI has not concluded within {self.settings.ci_timeout_seconds:.0f}s "
+                       f"(status: {verdict}); check the PR manually or set CI_REQUIRED=false.",
+            )
+        else:
+            self.store.set_state(workflow["id"], State.CI_CHECKING,
+                                 ci_status=verdict, ci_checked_at=now)
+        if verdict == "failed" and previous != "failed":
+            await self._comment(
+                workflow,
+                "**CI checks are failing on the fix PR** "
+                f"({workflow.get('pr_url')}): {', '.join(names[:10])}.\n\n"
+                "_The workflow stays in CI checking — it only moves to ready for "
+                "review once the checks pass._",
+            )
 
     async def _reconcile_session(self, row: dict) -> None:
         response = await self.devin.get_session(row["session_id"])
@@ -269,6 +376,8 @@ class WorkflowEngine:
             await self._handle_remediator(row, workflow, output, status, detail, fp, pulls)
         elif role == Role.ANALYST.value:
             await self._handle_analyst(row, workflow, output, fp)
+        elif role == Role.DEDUP.value:
+            await self._handle_dedup(row, workflow, output, detail, fp)
 
     async def _handle_triage(self, row, workflow, out, session_kind, fp):
         """Cheap intake verdict: queue for investigation, ask the reporter, or skip."""
@@ -417,11 +526,19 @@ class WorkflowEngine:
             now = utcnow()
             self.store.set_state(workflow["id"], State.PR_OPENED, remediation=out,
                                  pr_url=pr_url, pr_number=pr_number, pr_opened_at=now)
-            self.store.set_state(workflow["id"], State.READY_FOR_REVIEW)
             tests = "\n".join(f"- {t.get('command', '')}" for t in out.get("tests_executed", []))
             evidence = "\n".join(f"- {x}" for x in out.get("verification_evidence", []))
-            await self._comment(workflow, f"**Fix ready for review:** {pr_url}\n\n"
-                                f"**Tests:**\n{tests}\n\n**Evidence:**\n{evidence}")
+            if self.settings.ci_required:
+                self.store.set_state(workflow["id"], State.CI_CHECKING, ci_status="pending")
+                await self._comment(workflow, f"**Fix opened:** {pr_url}\n\n"
+                                    f"**Tests:**\n{tests}\n\n**Evidence:**\n{evidence}\n\n"
+                                    "_Agent-verified — the workflow moves to ready for review "
+                                    "only once the PR's GitHub checks pass._")
+            else:
+                self.store.set_state(workflow["id"], State.READY_FOR_REVIEW,
+                                     ci_status="skipped")
+                await self._comment(workflow, f"**Fix ready for review:** {pr_url}\n\n"
+                                    f"**Tests:**\n{tests}\n\n**Evidence:**\n{evidence}")
             self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
                                       acted_fingerprint=fp)
             return
@@ -450,6 +567,52 @@ class WorkflowEngine:
                             f"{out.get('followup_issue_url') or ''}")
         self.store.update_session(row["session_id"], active=0, finished_at=utcnow(),
                                   acted_fingerprint=fp)
+
+    async def _handle_dedup(self, row, workflow, out, session_kind, fp):
+        """Verdict of the pre-remediation dedup check."""
+        finish = {"active": 0, "finished_at": utcnow(), "acted_fingerprint": fp}
+        if not out:
+            if session_kind == "waiting":
+                reason = _last_devin_message(
+                    await self.devin.get_session(row["session_id"])
+                ) or "Dedup check is waiting for input."
+                self.store.set_state(workflow["id"], State.BLOCKED,
+                                     failure_reason=reason, waiting_since=utcnow())
+                self.store.update_session(row["session_id"], acted_fingerprint=fp)
+            else:
+                self.store.set_state(workflow["id"], State.BLOCKED,
+                                     failure_reason="dedup session ended without a verdict",
+                                     waiting_since=utcnow())
+                self.store.update_session(row["session_id"], **finish)
+            return
+        verdict = (out.get("verdict") or "").upper()
+        rationale = out.get("rationale") or ""
+        if verdict == "DUPLICATE":
+            pr = out.get("duplicate_pr_url") or ""
+            self.store.set_state(workflow["id"], State.SKIPPED,
+                                 needs_info_kind=SkipReason.DUPLICATE.value,
+                                 failure_reason=f"already fixed by open PR {pr}: {rationale}",
+                                 completed_at=utcnow())
+            await self._comment(
+                workflow,
+                f"**Skipped — duplicate remediation avoided** "
+                f"([dedup check]({row.get('url', '')}))\n\n"
+                f"An open PR already fixes this root cause: {pr}\n\n{rationale}",
+            )
+        elif verdict == "PROCEED":
+            # Workflow stays ROOT_CAUSE_FOUND; dispatch remediates next tick.
+            self.store.add_event(workflow["id"], "dedup_cleared", detail=rationale)
+        else:
+            reason = rationale or "dedup verdict was UNSURE"
+            self.store.set_state(workflow["id"], State.BLOCKED,
+                                 failure_reason=reason, waiting_since=utcnow())
+            await self._comment(
+                workflow,
+                f"**Duplicate check needs a maintainer** ([dedup check]({row.get('url', '')}))\n\n"
+                f"{reason}\n\n_Reply on this issue to confirm whether an open PR already "
+                "fixes this root cause._",
+            )
+        self.store.update_session(row["session_id"], **finish)
 
     async def _replies(self):
         if self._github_login is None and not self.settings.dry_run:
@@ -498,6 +661,10 @@ class WorkflowEngine:
                         workflow["id"], "human_reply_queued_investigation",
                         detail={"comment_id": comment["id"]},
                     )
+                elif workflow["state"] == State.BLOCKED.value:
+                    # Blocked with no live session: resume the last role session
+                    # if possible, otherwise start a fresh one with the context.
+                    await self._resume_or_recover(workflow, comment, login)
                 else:
                     self.store.add_event(
                         workflow["id"], "human_comment_unforwarded",
@@ -507,7 +674,156 @@ class WorkflowEngine:
             if current:
                 self.store.set_state(workflow["id"], current["state"], last_comment_id=last_id)
 
+    _RESUMABLE_ROLES = {Role.INVESTIGATOR.value, Role.REMEDIATOR.value, Role.DEDUP.value}
+
+    async def _resume_or_recover(self, workflow: dict, comment: dict, login: str) -> None:
+        """A blocked workflow got a human reply but has no live session.
+
+        First try resuming the most recent role session — messaging a settled
+        Devin session wakes it and preserves all prior context. If resumption
+        is impossible (session expired/gone), start a fresh same-role session
+        seeded with the blocker, the question asked, and the human's answer.
+        """
+        sessions = [s for s in self.store.get_sessions(workflow["id"])
+                    if s["role"] in self._RESUMABLE_ROLES]
+        last = sessions[-1] if sessions else None
+        reply = (
+            f"A human reply was posted on GitHub issue #{workflow['issue_number']} "
+            f"by {login}:\n\n{comment.get('body', '')}\n\n"
+            "Continue the work that was previously blocked and update the "
+            "structured output."
+        )
+        if last is not None:
+            try:
+                await self.devin.send_message(last["session_id"], reply)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not resume session %s: %s",
+                               last["session_id"], exc)
+            else:
+                self.store.update_session(last["session_id"], active=1, finished_at=None)
+                resumed = {
+                    Role.REMEDIATOR.value: State.REMEDIATING,
+                    Role.DEDUP.value: State.ROOT_CAUSE_FOUND,
+                }.get(last["role"], State.INVESTIGATING)
+                self.store.set_state(workflow["id"], resumed, waiting_since=None)
+                self.store.add_event(
+                    workflow["id"], "human_reply_resumed_session",
+                    detail={"comment_id": comment.get("id"),
+                            "session_id": last["session_id"], "role": last["role"]},
+                )
+                return
+        role = (Role.REMEDIATOR
+                if last is not None and last["role"] == Role.REMEDIATOR.value
+                else Role.INVESTIGATOR)
+        context = (
+            "The previous session for this workflow ended while it was blocked "
+            "and could not be resumed, so you are continuing its work.\n"
+            "Blocker/question the workflow was waiting on: "
+            f"{workflow.get('failure_reason') or '(unspecified)'}\n"
+            f"Human reply on the issue (by {login}): {comment.get('body', '')}\n"
+            "The full question-and-answer thread is in the issue comments."
+        )
+        if role == Role.INVESTIGATOR:
+            self.store.set_state(workflow["id"], State.INVESTIGATING, waiting_since=None)
+        await self._create_role_session(workflow, role, extra_context=context)
+        self.store.add_event(
+            workflow["id"], "human_reply_recovery_session",
+            detail={"comment_id": comment.get("id"), "role": role.value},
+        )
+
+    async def _dedup_gate(self, workflow: dict) -> str:
+        """Pre-remediation reconciliation: is an open PR already fixing this
+        root cause? Returns 'clear' (dispatch the Remediator), 'pending' (a
+        dedup check is running or already ran), or 'duplicate' (resolved here).
+        """
+        sessions = self.store.get_sessions(workflow["id"], Role.DEDUP)
+        if any(s.get("active") for s in sessions):
+            return "pending"
+        if sessions:
+            # Settled dedup verdicts are applied by _handle_dedup. Still being
+            # in ROOT_CAUSE_FOUND means a PROCEED cleared the way; anything else
+            # would have moved the workflow out of this state already.
+            return "clear" if any(
+                (s.get("structured_output") or {}).get("verdict") == "PROCEED"
+                for s in sessions
+            ) else "pending"
+        try:
+            pulls = await self.github.list_open_pulls(workflow["repo"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dedup: could not list open PRs for %s: %s",
+                           workflow["repo"], exc)
+            self.store.add_event(workflow["id"], "dedup_skipped",
+                                 detail=f"could not list open PRs: {exc}")
+            return "clear"
+        # Definitive: an open PR already links this issue as fixed.
+        for pull in pulls:
+            text = f"{pull.get('title') or ''}\n{pull.get('body') or ''}"
+            linked = {int(m.group(1)) for m in _FIX_LINK_RE.finditer(text)}
+            if workflow["issue_number"] in linked:
+                pr_url = pull.get("html_url", "")
+                self.store.set_state(
+                    workflow["id"], State.SKIPPED,
+                    needs_info_kind=SkipReason.DUPLICATE.value,
+                    failure_reason=f"open PR already linked to this issue: {pr_url}",
+                    completed_at=utcnow(),
+                )
+                self.store.add_event(workflow["id"], "dedup_hit", detail=pr_url)
+                await self._comment(
+                    workflow,
+                    "**Skipped — duplicate remediation avoided**\n\n"
+                    f"An open PR already references this issue: {pr_url}. "
+                    "No remediation session was started.",
+                )
+                return "duplicate"
+        # Ambiguous: cheap token/file overlap produces candidates; a small
+        # Dedup Devin decides whether any of them fixes the same root cause.
+        inv = workflow.get("investigation") or {}
+        query = _tokens(" ".join([
+            workflow.get("title") or "",
+            inv.get("root_cause") or "",
+            " ".join(inv.get("affected_components") or []),
+        ]))
+        candidates: list[tuple[dict, set[str]]] = []
+        for pull in pulls:
+            shared = query & _tokens(f"{pull.get('title') or ''} {pull.get('body') or ''}")
+            if len(shared) >= 2:
+                candidates.append((pull, shared))
+        if not candidates:
+            return "clear"
+        blocks = []
+        for pull, shared in candidates[:5]:
+            try:
+                files = await self.github.list_pull_files(workflow["repo"], pull["number"])
+            except Exception:  # noqa: BLE001
+                files = []
+            blocks.append(
+                f"- PR #{pull['number']}: {pull.get('title', '')} — {pull.get('html_url', '')}\n"
+                f"  shared signals: {', '.join(sorted(shared))}\n"
+                f"  changed files: {', '.join(files[:20]) or 'unavailable'}\n"
+                f"  body excerpt: {(pull.get('body') or '')[:400]}"
+            )
+        self.store.add_event(workflow["id"], "dedup_candidates",
+                             detail=[p.get("html_url") for p, _ in candidates[:5]])
+        await self._create_role_session(workflow, Role.DEDUP,
+                                        prompt_extra={"candidates": blocks})
+        return "dispatched"
+
+    def _budget_exceeded(self) -> bool:
+        return (
+            self.settings.max_total_acus is not None
+            and self.store.total_acus() >= self.settings.max_total_acus
+        )
+
     async def _dispatch(self):
+        if self._budget_exceeded():
+            if not getattr(self, "_budget_event_sent", False):
+                self._budget_event_sent = True
+                self.store.add_event(
+                    None, "budget_exceeded",
+                    detail=f"MAX_TOTAL_ACUS {self.settings.max_total_acus} reached; "
+                           "no new Devin sessions will be dispatched.",
+                )
+            return
         capacity = max(0, self.settings.max_concurrent_devins - self.store.count_active_sessions())
         if not capacity:
             return
@@ -518,6 +834,13 @@ class WorkflowEngine:
             if workflow["state"] == State.ROOT_CAUSE_FOUND.value and not self.store.get_sessions(
                 workflow["id"], Role.REMEDIATOR, active_only=True
             ):
+                if self.settings.dedup_enabled:
+                    verdict = await self._dedup_gate(workflow)
+                    if verdict != "clear":
+                        # 'dispatched' consumed a concurrency slot this tick;
+                        # 'pending'/'duplicate' did not create new work.
+                        capacity -= verdict == "dispatched"
+                        continue
                 await self._create_role_session(workflow, Role.REMEDIATOR)
                 capacity -= 1
         if self.settings.analysis_enabled:
@@ -526,7 +849,8 @@ class WorkflowEngine:
                     break
                 if workflow["state"] in {s.value for s in
                                          {State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING,
-                                          State.PR_OPENED, State.READY_FOR_REVIEW}} and not self.store.get_sessions(
+                                          State.PR_OPENED, State.CI_CHECKING,
+                                          State.READY_FOR_REVIEW}} and not self.store.get_sessions(
                                               workflow["id"], Role.ANALYST
                                           ):
                     await self._create_role_session(workflow, Role.ANALYST)
@@ -552,7 +876,21 @@ class WorkflowEngine:
                 await self._create_role_session(workflow, Role.TRIAGE)
                 capacity -= 1
 
-    async def _create_role_session(self, workflow: dict, role: Role):
+    async def _create_role_session(
+        self,
+        workflow: dict,
+        role: Role,
+        *,
+        extra_context: str | None = None,
+        prompt_extra: dict | None = None,
+    ) -> dict | None:
+        if self._budget_exceeded():
+            self.store.add_event(
+                workflow["id"], "dispatch_skipped_budget",
+                detail=f"{role.value} session skipped: MAX_TOTAL_ACUS "
+                       f"{self.settings.max_total_acus} reached",
+            )
+            return None
         issue = await self.github.get_issue(workflow["repo"], workflow["issue_number"])
         comments = await self.github.list_issue_comments(workflow["repo"], workflow["issue_number"])
         inv = workflow.get("investigation") or {}
@@ -567,9 +905,19 @@ class WorkflowEngine:
         elif role == Role.REMEDIATOR:
             investigator = next(iter(self.store.get_sessions(workflow["id"], Role.INVESTIGATOR)), {})
             prompt, schema, limit = remediator_prompt(workflow["repo"], issue, inv, investigator.get("url", "")), REMEDIATION_SCHEMA, self.settings.remediator_acu_limit
-            self.store.set_state(workflow["id"], State.REMEDIATING, remediation_started_at=utcnow())
+            self.store.set_state(workflow["id"], State.REMEDIATING,
+                                 remediation_started_at=utcnow(), waiting_since=None)
+        elif role == Role.DEDUP:
+            prompt, schema, limit = (
+                dedup_prompt(workflow["repo"], issue, inv,
+                             (prompt_extra or {}).get("candidates") or []),
+                DEDUP_SCHEMA,
+                self.settings.dedup_acu_limit,
+            )
         else:
             prompt, schema, limit = analyst_prompt(workflow["repo"], issue, inv), ANALYSIS_SCHEMA, self.settings.analyst_acu_limit
+        if extra_context:
+            prompt += f"\n\n## Recovery context\n{extra_context}\n"
         tags = ["superset-x-devin", f"repo:{workflow['repo']}",
                 f"issue:{workflow['issue_number']}", f"role:{role.value}"]
         session = await self.devin.create_session(
@@ -581,6 +929,7 @@ class WorkflowEngine:
                                   role=role.value, url=session.get("url", ""), active=1)
         self.store.add_event(workflow["id"], "session_created", detail={"session_id": session["session_id"],
                                                                         "role": role.value})
+        return session
 
     async def _comment(self, workflow: dict, body: str):
         if self.settings.dry_run:

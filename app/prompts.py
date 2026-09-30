@@ -12,10 +12,27 @@ from pathlib import Path
 
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
+# Skills that must exist for the pipeline to produce well-formed sessions.
+# Missing files previously degraded prompts silently; startup now fails fast.
+REQUIRED_SKILLS = ("superset-bug-investigation", "superset-fix-verification")
+
 
 def _skill(name: str) -> str:
     path = _SKILLS_DIR / f"{name}.md"
-    return path.read_text() if path.exists() else ""
+    if not path.exists():
+        raise FileNotFoundError(f"required skill file missing: {path}")
+    return path.read_text()
+
+
+def validate_skills(skills_dir: Path | None = None) -> list[str]:
+    """Fail startup if any required skill file is absent. Returns loaded names."""
+    directory = skills_dir or _SKILLS_DIR
+    missing = [name for name in REQUIRED_SKILLS if not (directory / f"{name}.md").exists()]
+    if missing:
+        raise RuntimeError(
+            "required skill files missing from " + str(directory) + ": " + ", ".join(missing)
+        )
+    return list(REQUIRED_SKILLS)
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +308,57 @@ The orchestrator gates on your structured output:
 """
 
 # ---------------------------------------------------------------------------
+# Dedup gate (cheap check before spending a remediation session)
+# ---------------------------------------------------------------------------
+
+DEDUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {
+            "type": "string",
+            "description": "One of: DUPLICATE, PROCEED, UNSURE.",
+        },
+        "duplicate_pr_url": {
+            "type": ["string", "null"],
+            "description": "When verdict is DUPLICATE: URL of the open PR already fixing "
+            "this root cause.",
+        },
+        "rationale": {"type": "string", "description": "2-4 sentences justifying the verdict."},
+    },
+    "required": ["verdict", "rationale"],
+}
+
+DEDUP_PROMPT = """You are the DEDUP gate of an autonomous engineering remediation system for the
+Apache Superset fork `{repo}`.
+
+An Investigator has already reproduced issue #{number} and identified its root
+cause. Before the system spends a remediation session, decide whether an
+existing OPEN pull request already fixes the SAME root cause. Duplicate
+remediation is the failure you exist to prevent.
+
+## Issue #{number}: {title}
+URL: {url}
+
+Root cause: {root_cause}
+Affected components: {affected_components}
+
+## Candidate open PRs (pre-filtered for likely overlap)
+{candidates}
+
+## Task
+- Read each candidate PR (title, body, linked issues, diff) — the repo and PRs
+  are public. Decide if any of them already fixes THIS root cause, not merely
+  a related symptom.
+- DUPLICATE — an open PR already addresses the same root cause. Set
+  duplicate_pr_url to it.
+- PROCEED — no open PR covers this root cause; remediation should go ahead.
+- UNSURE — evidence is genuinely ambiguous and a maintainer should decide.
+
+Do NOT modify code and do NOT open PRs. Fill the structured output and finish.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Engineering analyst
 # ---------------------------------------------------------------------------
 
@@ -439,6 +507,18 @@ def remediator_prompt(repo: str, issue: dict, inv: dict, investigator_url: str) 
         verification_plan=_bullets(inv.get("verification_plan")),
         suggested_tests=_bullets(inv.get("suggested_tests")),
         skill=_skill("superset-fix-verification"),
+    )
+
+
+def dedup_prompt(repo: str, issue: dict, inv: dict, candidates: list[str]) -> str:
+    return DEDUP_PROMPT.format(
+        repo=repo,
+        number=issue["number"],
+        title=issue.get("title", ""),
+        url=issue.get("html_url", ""),
+        root_cause=inv.get("root_cause") or "(not stated)",
+        affected_components=", ".join(inv.get("affected_components") or []) or "(none listed)",
+        candidates="\n".join(candidates) if candidates else "(none)",
     )
 
 

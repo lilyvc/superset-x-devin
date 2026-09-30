@@ -98,6 +98,8 @@ class Store:
             self._ensure_columns(conn, "workflows", {
                 "updated_at": "TEXT", "last_comment_id": "INTEGER DEFAULT 0",
                 "triage": "TEXT", "triaged_started_at": "TEXT",
+                "ci_status": "TEXT", "ci_checked_at": "TEXT",
+                "ci_timeout_notified": "INTEGER DEFAULT 0",
             })
 
     @staticmethod
@@ -235,6 +237,12 @@ class Store:
     def count_active_sessions(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT count(*) FROM sessions WHERE active=1").fetchone()[0]
+
+    def total_acus(self) -> float:
+        with self._conn() as conn:
+            return float(
+                conn.execute("SELECT COALESCE(SUM(acus), 0) FROM sessions").fetchone()[0]
+            )
 
     def list_active_sessions(self) -> list[dict]:
         with self._conn() as conn:

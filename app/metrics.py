@@ -34,7 +34,9 @@ def metrics(store, settings) -> dict:
         "active": sum(r["state"] in active_values for r in rows),
         "waiting_for_human": sum(r["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value} for r in rows),
         "blocked_failed": sum(r["state"] in {State.BLOCKED.value, State.FAILED.value, State.ESCALATED.value} for r in rows),
-        "prs_ready": sum(r["state"] in {State.PR_OPENED.value, State.READY_FOR_REVIEW.value} for r in rows),
+        "prs_ready": states[State.READY_FOR_REVIEW.value],
+        "ci_pending": sum(r["state"] in {State.PR_OPENED.value, State.CI_CHECKING.value}
+                          for r in rows),
         "completed": states[State.COMPLETED.value],
         "not_reproducible": states[State.NOT_REPRODUCIBLE.value],
     }
@@ -50,7 +52,7 @@ def metrics(store, settings) -> dict:
     )
     reproduced = sum(r["state"] in {s.value for s in {
         State.REPRODUCED, State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING,
-        State.PR_OPENED, State.READY_FOR_REVIEW, State.COMPLETED,
+        State.PR_OPENED, State.CI_CHECKING, State.READY_FOR_REVIEW, State.COMPLETED,
     }} for r in rows)
     now = datetime.now(timezone.utc)
     sessions = [s for r in rows for s in store.get_sessions(r["id"])]
