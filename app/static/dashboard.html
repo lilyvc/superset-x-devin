@@ -130,8 +130,10 @@ function sessionsHtml(w){
   const ss=(w.sessions||[]);
   if(!ss.length)return '';
   const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
+  const roleOrder={triage:0,investigator:1,dedup:2,remediator:3,analyst:4};
+  const sorted=[...ss].sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9));
   const real=/(?:devin-)?[0-9a-f]{32}/;
-  return `<div class="sesslist small">${ss.map(s=>{
+  return `<div class="sesslist small">${sorted.map(s=>{
     const label=roleLabel[s.role]||esc(s.role);
     return real.test(s.id||'')
       ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${label} ↗</a>`

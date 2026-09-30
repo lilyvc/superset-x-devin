@@ -8,6 +8,7 @@
   <div class="card" style="max-width:760px">
     <ul class="milestones" id="steps" style="margin:4px 0 14px"></ul>
     <div class="small muted" id="analysis" style="margin:0 0 10px"></div>
+    <details class="small" id="anadetail" style="display:none;margin:0 0 12px"><summary style="cursor:pointer">Analyst results</summary><div id="anabody" style="margin-top:8px"></div></details>
     <div class="sesslist small" id="sessions"></div>
     <div class="small" id="links" style="margin-top:12px"></div>
   </div>
@@ -40,8 +41,10 @@ function stepNote(w,i){
     return '';
   }
   if(i===2){
-    if(rem.fix_summary||rem.summary)return esc(rem.fix_summary||rem.summary);
-    if(w.ci_status&&w.state==='CI_CHECKING')return 'waiting on CI: '+esc(w.ci_status);
+    const fix=rem.fix_summary||rem.summary;
+    if(w.state==='CI_CHECKING'||w.state==='PR_OPENED')
+      return (fix?esc(fix)+' · ':'')+'waiting on CI'+(w.ci_status?': '+esc(w.ci_status):'');
+    if(fix)return esc(fix);
     return '';
   }
   if(i===3){
@@ -85,8 +88,10 @@ async function load(){
   if(rows.length){$('#provenance').style.display='';$('#provenance').innerHTML=rows.join('');}
   $('#steps').innerHTML=stepsHtml(w);
   const roleLabel={triage:'Triage Devin',investigator:'Investigator Devin',remediator:'Remediator Devin',analyst:'Analyst Devin',dedup:'Dedup check'};
+  const roleOrder={triage:0,investigator:1,dedup:2,remediator:3,analyst:4};
   const real=/(?:devin-)?[0-9a-f]{32}/;
-  $('#sessions').innerHTML=(w.sessions||[]).map(s=>
+  const sessions=[...(w.sessions||[])].sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9));
+  $('#sessions').innerHTML=sessions.map(s=>
     real.test(s.session_id||'')
       ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">${roleLabel[s.role]||esc(s.role)} ↗</a>`
       : `<span class="muted">${roleLabel[s.role]||esc(s.role)}</span>`
@@ -104,6 +109,18 @@ async function load(){
   }
   $('#analysis').textContent='';
   $('#analysis').innerHTML=anaLine;
+  if(Object.keys(ana).length){
+    const rows=[];
+    const add=(k,v)=>{if(v!=null&&v!==''&&!(Array.isArray(v)&&!v.length))rows.push(`<div style="margin:3px 0"><b class="muted">${k}</b> ${v}</div>`)};
+    add('Summary',esc(ana.summary));
+    add('Systemic risk',esc(ana.systemic_risk));
+    add('Same pattern found in',(ana.similar_code_locations||[]).map(esc).join('<br>'));
+    add('Related issues',(ana.related_issues||[]).map(esc).join(', '));
+    add('Recommended follow-up',esc(ana.recommended_followup));
+    if(ana.followup_issue_url)add('Follow-up issue',`<a href="${esc(ana.followup_issue_url)}" target="_blank">${esc(ana.followup_issue_url)}</a>`);
+    $('#anabody').innerHTML=rows.join('');
+    $('#anadetail').style.display='';
+  }
   const links=[];
   if(w.issue_url)links.push(`<a href="${esc(w.issue_url)}" target="_blank">GitHub issue →</a>`);
   if(w.pr_url){
