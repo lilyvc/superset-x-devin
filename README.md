@@ -1,139 +1,83 @@
-# superset-x-devin
+# superset-x-devin: GitHub issue-to-fix service
 
-Event-driven automation that orchestrates [Devin](https://devin.ai) sessions from GitHub
-issue events. It runs **externally** — it watches a configurable target repository via
-webhooks and never installs code into that repo.
+This external service processes GitHub issues in `TARGET_REPO`. Devin investigates issues and prepares pull requests (PRs) with code changes.
+The service stores its state outside the target repository. It does not install an application or agent there.
 
-```
-GitHub webhook (issues / issue_comment)
-        |
-        v
-  FastAPI endpoint  --verify signature-->  Orchestrator
-        |                                     |
-        |                                     |-- Devin API: create session / send message / poll
-        |                                     |-- SQLite: delivery dedup + issue -> session map
-        v                                     |
-   202 response <-----------------------------+
-                                              v
-                                GitHub API: post comment / add label
-```
+## The problem
 
-**Current behaviour (v1)**
+Engineers must decide which reports describe real problems.
+They must reproduce each problem, find its root cause, and plan a safe fix.
 
-| GitHub event | What happens |
+## The result
+
+The service does this work and asks an engineer for help when it cannot continue safely.
+The goal is not to create the most autonomous PRs.
+The goal is to get a trustworthy fix with the least engineer attention.
+
+## How it works
+
+1. The service finds open issues through polling or GitHub webhooks.
+2. Intake filters reject issues that match configured rules. Triage sends each other issue to investigation, clarification, or `SKIPPED`.
+3. The Investigator reproduces the issue and returns structured evidence.
+4. Python checks the evidence and checks open PRs for an existing fix.
+5. The Remediator prepares a fix and reports test results.
+6. Python checks the Remediator's evidence and the PR's GitHub CI results.
+7. The workflow reaches `READY_FOR_REVIEW` when required checks pass.
+8. The service marks a merged PR as `COMPLETED`. It asks a human for help when a workflow is `NEEDS_INFO` or `BLOCKED`.
+
+The service can also mark an issue `NOT_REPRODUCIBLE`, `SKIPPED`, `FAILED`, or `ESCALATED`.
+
+## Quick start
+
+1. Copy `.env.example` to `.env`.
+2. Set `TARGET_REPO`, `GITHUB_TOKEN`, `ADMIN_TOKEN`, and `DRY_RUN=true` in `.env`.
+3. Run `docker compose up --build`.
+4. Export `ADMIN_TOKEN` in your shell.
+5. Request one workflow tick from another terminal:
+
+   ```bash
+   curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
+   ```
+
+6. Open the dashboard at `http://localhost:8000`.
+
+Dry-run uses GitHub reads, fake Devin sessions, and no GitHub comment writes.
+See [Operations](docs/OPERATIONS.md) for the full setup.
+
+## Documentation
+
+| Document | Description |
 |---|---|
-| `issues.opened` / `issues.reopened` | A Devin session is created to summarize the issue; the summary is posted back as an issue comment. |
-| `issue_comment.created` | If the issue already has a Devin session on record, the comment is forwarded into that session — this is how a human reply to Devin's question resumes the workflow. |
-
-Roadmap items (dispatch idempotency, remediation workflow, labels) live in [TODO.md](TODO.md).
-
-## Prerequisites
-
-- Python 3.12+ or Docker
-- A **Devin API key** — create a service-user key in the Devin web app (Settings → API)
-- A **GitHub token** with `issues: write` on the target repo (a fine-grained PAT scoped to the repo works)
-- A **webhook secret** — any random string, e.g. `openssl rand -hex 32`
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill it in. Everything is env-driven so the same
-deployment can be pointed at a different repo by changing `TARGET_REPO` plus the
-token — no code changes needed.
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `TARGET_REPO` | yes | `owner/name` to watch, e.g. `lilyvc/superset` |
-| `DEVIN_API_KEY` | yes* | Devin v1 API key (`* `not needed with `DRY_RUN=true`) |
-| `GITHUB_TOKEN` | yes* | Token with issues write on the target repo |
-| `GITHUB_WEBHOOK_SECRET` | recommended | Must match the webhook's secret; requests without a valid `X-Hub-Signature-256` are rejected |
-| `DRY_RUN` | no | `true` = run the whole pipeline with no external calls (comments are logged) |
-| `DEVIN_API_BASE_URL` | no | Defaults to `https://api.devin.ai` |
-| `POLL_INTERVAL_SECONDS` / `POLL_TIMEOUT_SECONDS` | no | Devin session polling cadence (10s / 30min defaults) |
-| `MAX_ACU_LIMIT` | no | Cap ACUs per spawned Devin session |
-| `REMEDIATION_LABEL` | no | Label applied to an issue when dispatched, e.g. `devin-remediation-started` |
-| `DB_PATH` | no | SQLite path (default `orchestrator.db`; `/data` under compose) |
-
-## Run
-
-### Docker
-
-```bash
-cp .env.example .env   # fill in secrets
-docker compose up --build
-```
-
-### Locally
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-The server exposes `POST /webhooks/github` and `GET /healthz`.
-
-## Simulate the workflow (no webhook required)
-
-With the server running in dry-run mode you can exercise the full pipeline —
-signature check, dedup, dispatch, poll, comment — with zero credentials:
-
-```bash
-DRY_RUN=true uvicorn app.main:app --port 8000
-
-# fake issue opened:
-python scripts/simulate.py issue-opened --number 1 --title "Dashboard crashes on load"
-
-# human replying on a tracked issue (forwards into the recorded session):
-python scripts/simulate.py issue-comment --number 1 --body "It's the Explore page"
-
-# build the payload from a real issue in TARGET_REPO (needs GITHUB_TOKEN):
-python scripts/simulate.py issue-opened --real --number 4
-```
-
-The simulated comment is written to the server log. Turn off `DRY_RUN` and set real
-credentials to run end-to-end for real — the same `simulate.py` calls drive it.
-
-## Point GitHub at it (real events)
-
-1. Expose the service on a public URL (deploy it, or `ngrok http 8000` / `cloudflared`
-   for local testing).
-2. In the target repo: **Settings → Webhooks → Add webhook**
-   - Payload URL: `https://<your-host>/webhooks/github`
-   - Content type: `application/json`
-   - Secret: same value as `GITHUB_WEBHOOK_SECRET`
-   - Events: **Issues** and **Issue comments** (or "Let me select individual events")
-3. GitHub sends a `ping`; check `/healthz` and the server logs.
-
-Open an issue on the target repo → a Devin session link appears in the logs → a summary
-comment lands on the issue.
-
-## How a reply resumes the workflow
-
-When a Devin session finishes `blocked` (typically because it asked a question), the
-orchestrator posts the question as an issue comment and keeps the `issue → session_id`
-mapping in SQLite. A subsequent `issue_comment.created` webhook looks up that mapping and
-calls `POST /v1/sessions/{id}/message`, so the **same** Devin session picks the work back
-up with the reply as new context — a new session is never created for replies.
+| [Architecture](docs/ARCHITECTURE.md) | Components, workflow rules, gates, and data |
+| [Operations](docs/OPERATIONS.md) | Setup, configuration, credentials, and troubleshooting |
+| [Plan](docs/PLAN.md) | Implemented work, follow-ups, non-goals, and risks |
 
 ## Project layout
 
-```
+```text
 app/
-  main.py          FastAPI app, signature verification, webhook routing
-  orchestrator.py  Event handling, Devin session lifecycle, commenting
-  devin_client.py  Devin v1 API client (create/poll/message sessions)
-  github_client.py GitHub REST client (comments, labels)
-  store.py         SQLite: webhook delivery dedup + issue→session mapping
-  config.py        Env-based settings
-scripts/simulate.py  Signed fake webhook sender
-tests/               pytest
-Dockerfile / docker-compose.yml
+  main.py          FastAPI routes and service setup
+  workflow.py      Workflow tick, discovery, reconciliation, and dispatch
+  handlers.py      Role output handling
+  gates.py         Python decision gates
+  parsing.py       GitHub and Devin parsers
+  states.py        Workflow states and role names
+  prompts.py       Devin prompts and output schemas
+  devin_client.py  Devin v1/v3 API client
+  devin_status.py  Devin status normalization
+  github_client.py GitHub API client
+  store.py         SQLite persistence
+  metrics.py       Database-derived metrics
+  poller.py        Periodic workflow tick
+  static/          Dashboard and issue pages
+docs/
+  ARCHITECTURE.md
+  OPERATIONS.md
+  PLAN.md
+scripts/simulate.py
+skills/
+tests/
+Dockerfile
+docker-compose.yml
+.env.example
 ```
-
-## Security notes
-
-- Webhook payloads are verified with `X-Hub-Signature-256` when a secret is configured.
-- Only `issues` and `issue_comment` events are handled; everything else is ignored.
-- The GitHub token only ever writes comments/labels on `TARGET_REPO`.
-- Devin sessions created here are given no repository secrets beyond what the prompt
-  contains; scope `secret_ids` on session creation if you later need that.
