@@ -6,6 +6,15 @@ from statistics import median
 from .parsing import parse_dt
 from .states import ACTIVE_STATES, FUNNEL, Origin, State
 
+_WAIT_STATES = {State.NEEDS_INFO.value, State.BLOCKED.value}
+_TERMINAL = {s.value for s in
+             (State.SKIPPED, State.COMPLETED, State.NOT_REPRODUCIBLE,
+              State.FAILED, State.ESCALATED)}
+_IN_PROGRESS = {s.value for s in (
+    State.DISCOVERED, State.QUEUED, State.TRIAGING, State.INVESTIGATING,
+    State.REPRODUCED, State.ROOT_CAUSE_FOUND, State.REMEDIATING,
+    State.VERIFYING, State.PR_OPENED, State.CI_CHECKING)}
+
 
 def _duration(rows, end):
     values = []
@@ -13,6 +22,35 @@ def _duration(rows, end):
         start, finish = parse_dt(row.get("discovered_at")), parse_dt(row.get(end))
         if start and finish:
             values.append((finish - start).total_seconds())
+    return median(values) if values else None
+
+
+def _wait_seconds(store, row) -> float:
+    """Total time the workflow spent waiting on a human (NEEDS_INFO/BLOCKED),
+    derived from recorded state transitions."""
+    total = 0.0
+    entered = None
+    for event in store.get_events(row["id"]):
+        to_state = event.get("to_state")
+        if to_state in _WAIT_STATES:
+            entered = parse_dt(event.get("at"))
+        elif to_state and entered is not None:
+            left = parse_dt(event.get("at"))
+            if left:
+                total += max(0.0, (left - entered).total_seconds())
+            entered = None
+    return total
+
+
+def _time_to_fix(store, rows) -> float | None:
+    """Median discovered_at -> pr_opened_at, minus time parked waiting for a
+    human (NEEDS_INFO/BLOCKED)."""
+    values = []
+    for row in rows:
+        start, finish = parse_dt(row.get("discovered_at")), parse_dt(row.get("pr_opened_at"))
+        if start and finish:
+            values.append(
+                max(0.0, (finish - start).total_seconds() - _wait_seconds(store, row)))
     return median(values) if values else None
 
 
@@ -62,15 +100,33 @@ def metrics(store, settings) -> dict:
                    for r in rows)
     defects_discovered = sum(
         r.get("origin") == Origin.DEVIN_DISCOVERED.value for r in rows)
+    # Review-ready PRs are human attention too — a VP looking at "needs human"
+    # expects to see PRs waiting on a reviewer alongside clarification asks.
+    awaiting_review = states[State.READY_FOR_REVIEW.value]
+    awaiting_input = groups["waiting_for_human"]
+    awaiting_blocked = groups["blocked_failed"]
+    awaiting_human = awaiting_review + awaiting_input + awaiting_blocked
+    in_progress = sum(r["state"] in _IN_PROGRESS for r in rows)
+    merged_prs = [r for r in rows if r["state"] == State.COMPLETED.value and r.get("pr_number")]
+    merged_clean = sum(bool(r.get("merged_without_changes")) for r in merged_prs)
     return {
         "counts": states, "groups": groups, "queue_depth": groups["backlog"],
         "executive": {
             "bugs_handled": len(rows),
             "verified_fixes": verified,
-            "median_time_to_fix": _duration(rows, "pr_opened_at"),
-            "needs_human": groups["waiting_for_human"],
+            "median_time_to_fix": _time_to_fix(store, rows),
+            "needs_human": awaiting_human,
             "defects_discovered": defects_discovered,
             "acus_per_verified_fix": total_acus / verified if verified else None,
+            "issues_open": sum(r["state"] not in _TERMINAL for r in rows),
+            "in_progress": in_progress,
+            "awaiting_human": awaiting_human,
+            "awaiting_review": awaiting_review,
+            "awaiting_input": awaiting_input,
+            "awaiting_blocked": awaiting_blocked,
+            "solved": groups["completed"],
+            "merged_without_changes_pct": (
+                merged_clean / len(merged_prs) if merged_prs else None),
         },
         "active_sessions": store.count_active_sessions(), "max_concurrent": settings.max_concurrent_devins,
         "utilization": store.count_active_sessions() / settings.max_concurrent_devins

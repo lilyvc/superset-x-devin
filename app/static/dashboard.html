@@ -17,10 +17,10 @@
   </div>
 
   <div class="grid g4">
-    <div class="card kpi"><h2>Bugs handled</h2><div class="v" id="k-handled">–</div><div class="d" id="k-discovered-sub">–</div></div>
-    <div class="card kpi"><h2>Verified fixes</h2><div class="v" id="k-fixes">–</div><div class="d" id="k-ci">–</div></div>
-    <div class="card kpi"><h2>Median time to fix</h2><div class="v" id="k-ttf">–</div><div class="d">issue → verified PR</div></div>
-    <div class="card kpi"><h2>Needs human</h2><div class="v" id="k-human">–</div><div class="d">blocked / clarification</div></div>
+    <div class="card kpi"><h2>Issues open</h2><div class="v" id="k-open">–</div><div class="d" id="k-open-sub">–</div></div>
+    <div class="card kpi"><h2>In progress</h2><div class="v" id="k-progress">–</div><div class="d" id="k-progress-sub">–</div></div>
+    <div class="card kpi"><h2>Awaiting human</h2><div class="v" id="k-human">–</div><div class="d" id="k-human-sub">–</div></div>
+    <div class="card kpi"><h2>Solved</h2><div class="v" id="k-solved">–</div><div class="d" id="k-solved-sub">–</div></div>
   </div>
 
   <section class="card">
@@ -28,198 +28,147 @@
     <div class="worklist" id="worklist"></div>
   </section>
 
-  <section class="proof" id="proof" style="display:none">
-    <div class="kicker">Latest verified fix</div>
-    <h3 id="p-title"></h3>
-    <dl>
-      <dt>Impact</dt><dd id="p-impact"></dd>
-      <dt>Devin found</dt><dd id="p-found"></dd>
-      <dt>Fix</dt><dd id="p-fix"></dd>
-    </dl>
-    <ul class="checks" id="p-checks"></ul>
-    <div id="p-links" style="margin-top:14px"></div>
-  </section>
-
-  <details class="ops"><summary>Operations</summary>
-    <div class="inner">
-      <section class="grid g3">
-        <div class="card"><h2>Pipeline</h2>
-          <table class="small"><tbody id="ops-pipe"></tbody></table>
-        </div>
-        <div class="card"><h2>Delivery</h2>
-          <table class="small"><tbody id="delivery"></tbody></table>
-        </div>
-        <div class="card"><h2>Sessions &amp; cost</h2>
-          <table class="small"><tbody id="ops-cost"></tbody></table>
-        </div>
-      </section>
-      <section class="grid g2">
-        <div class="card funnel"><h2>Funnel</h2><div id="funnel"></div></div>
-        <div class="card"><h2>State counts</h2><table class="small"><tbody id="ops-states"></tbody></table></div>
-      </section>
-      <section class="card"><h2>Pipeline lanes</h2><div id="lanes"></div></section>
-    </div>
-  </details>
-
   <p class="foot">The goal isn’t to maximize the number of autonomous PRs — it’s to minimize the engineer attention required to turn a bug report into a trustworthy fix.</p>
 </main>
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ORDER=['QUEUED','DISCOVERED','TRIAGING','SKIPPED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW','COMPLETED','NOT_REPRODUCIBLE','BLOCKED','FAILED','ESCALATED'];
-const LANES=[['Discovered',['DISCOVERED']],['Triaging',['TRIAGING']],['Queued',['QUEUED']],['Investigating',['INVESTIGATING']],['Waiting for human',['NEEDS_INFO','BLOCKED']],['Root cause found',['REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR open / CI',['PR_OPENED','CI_CHECKING']],['Ready for review',['READY_FOR_REVIEW']],['Completed',['COMPLETED']],['Skipped by triage',['SKIPPED']],['Closed out',['NOT_REPRODUCIBLE','FAILED','ESCALATED']]];
 const OUTCOME={
-  READY_FOR_REVIEW:['Fix ready','READY_FOR_REVIEW'],COMPLETED:['Merged','COMPLETED'],
+  READY_FOR_REVIEW:['Ready for review','READY_FOR_REVIEW'],COMPLETED:['Merged','COMPLETED'],
   CI_CHECKING:['PR open · CI','CI_CHECKING'],PR_OPENED:['PR open','READY_FOR_REVIEW'],
-  REMEDIATING:['Fixing','REMEDIATING'],VERIFYING:['Verifying','REMEDIATING'],
+  REMEDIATING:['Remediating','REMEDIATING'],VERIFYING:['Verifying','REMEDIATING'],
   INVESTIGATING:['Investigating','INVESTIGATING'],
   REPRODUCED:['Reproduced','REPRODUCED'],ROOT_CAUSE_FOUND:['Root cause found','REPRODUCED'],
-  NEEDS_INFO:['Waiting','NEEDS_INFO'],BLOCKED:['Needs attention','BLOCKED'],
+  NEEDS_INFO:['Needs input','NEEDS_INFO'],BLOCKED:['Blocked','BLOCKED'],
   SKIPPED:['Skipped','SKIPPED'],NOT_REPRODUCIBLE:['Not reproducible','NOT_REPRODUCIBLE'],
   FAILED:['Failed','FAILED'],ESCALATED:['Escalated','ESCALATED'],
   TRIAGING:['Triaging','TRIAGING'],QUEUED:['Queued','QUEUED'],DISCOVERED:['New','DISCOVERED'],
 };
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}
+const hm=iso=>iso?new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'–';
 let repo='';
+
 function originTag(w){
   if(w.origin==='DEVIN_DISCOVERED')
-    return `<span class="origin devin" title="Filed by Devin while investigating ${w.parent_issue_number?'#'+w.parent_issue_number:'another defect'}">✦ Devin${w.parent_issue_number?` · from <a href="/issues/${w.parent_issue_number}">#${w.parent_issue_number}</a>`:''}</span>`;
-  return '<span class="origin" title="Opened by a human reporter">● reported</span>';
+    return `<span class="origin devin" title="Filed by Devin while investigating ${w.parent_issue_number?'#'+w.parent_issue_number:'another defect'}">✦ Devin${w.parent_issue_number?` · from <a href="/issues/${w.parent_issue_number}" onclick="event.stopPropagation()">#${w.parent_issue_number}</a>`:''}</span>`;
+  return '';
 }
 function outcome(w){
   const [label,cls]=OUTCOME[w.state]||[w.state,''];
   return `<span class="pill ${cls}">${label}</span>`;
 }
-function evidence(w){
-  const pr=w.pr_url?`PR <a href="${esc(w.pr_url)}" target="_blank">#${w.pr_url.split('/').pop()}</a>`:null;
-  const bits=[];
-  if(w.reproduced_at)bits.push('Reproduced');
-  if(w.root_cause_at)bits.push('Root cause');
-  if(pr)bits.push(pr);
-  if(w.ci_status==='passed')bits.push('CI green');
-  else if(w.ci_status&&w.ci_status!=='skipped')bits.push(`CI ${w.ci_status}`);
-  if(bits.length)return bits.join(' → ');
-  if(w.state==='SKIPPED'||w.state==='NOT_REPRODUCIBLE')return `<span class="muted">${esc(w.failure_reason||w.needs_info_kind||'–')}</span>`;
-  if(w.state==='NEEDS_INFO'||w.state==='BLOCKED')return `<span class="muted">${esc(w.failure_reason||'waiting for an answer')}</span>`;
-  if(w.failure_reason)return `<span class="muted">${esc(w.failure_reason)}</span>`;
-  return '<span class="muted">–</span>';
+function prBadge(w){
+  if(!w.pr_url)return '';
+  const n=w.pr_url.split('/').pop();
+  let icon,cls,label;
+  if(w.state==='COMPLETED'){icon='●';cls='merged';label='merged'}
+  else if(w.ci_status==='failed'){icon='✕';cls='fail';label='CI failing'}
+  else if(w.ci_status==='passed'||w.state==='READY_FOR_REVIEW'){icon='✓';cls='ready';label='ready to merge'}
+  else{icon='◌';cls='pending';label='CI '+(w.ci_status||'pending')}
+  return `<a class="prst ${cls}" href="${esc(w.pr_url)}" target="_blank" onclick="event.stopPropagation()" title="PR #${n} · ${label}">${icon} PR #${n}</a>`;
 }
-function humanNeeded(w){
-  if(w.state==='NEEDS_INFO')return 'Reporter';
-  if(w.state==='BLOCKED'||w.state==='ESCALATED')return 'Maintainer';
-  return '<span class="muted">—</span>';
-}
-const MILESTONES=[
-  ['Discovered',['DISCOVERED']],
-  ['Triage',['TRIAGING','QUEUED']],
-  ['Investigate',['INVESTIGATING']],
-  ['Reproduced',['REPRODUCED']],
-  ['Root cause',['ROOT_CAUSE_FOUND']],
-  ['Fix',['REMEDIATING','VERIFYING']],
-  ['PR opened',['PR_OPENED']],
-  ['CI checks',['CI_CHECKING']],
-  ['Ready for review',['READY_FOR_REVIEW']],
+// Four-step lifecycle. Investigating covers reproduction; Remediating covers
+// the fix, verification and the CI cycle.
+const STEPS=[
+  ['Triaging',['DISCOVERED','TRIAGING']],
+  ['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],
+  ['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],
+  ['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],
 ];
-const BADSTATES={NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1,SKIPPED:1};
+const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
+function stepNote(w,i){
+  const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{};
+  if(i===0){
+    if(w.state==='SKIPPED')return esc(tri.rationale||w.failure_reason||'skipped by triage');
+    if(tri.verdict==='ACTIONABLE')return esc(tri.rationale||'actionable engineering defect');
+    if(tri.verdict==='NEEDS_INFO')return 'asked reporter: '+esc(tri.clarification_question||'more information needed');
+    if(tri.verdict)return esc(tri.verdict.toLowerCase());
+    return '';
+  }
+  if(i===1){
+    if(w.state==='NOT_REPRODUCIBLE')return 'could not reproduce — needs a better report or more detail';
+    if(w.state==='NEEDS_INFO')return 'needs input: '+esc((inv.clarification_question||tri.clarification_question||w.failure_reason||''));
+    if(inv.root_cause)return esc(inv.root_cause);
+    if(inv.summary)return esc(inv.summary);
+    return '';
+  }
+  if(i===2){
+    if(rem.fix_summary||rem.summary)return esc(rem.fix_summary||rem.summary);
+    if(w.ci_status&&w.state==='CI_CHECKING')return 'waiting on CI: '+esc(w.ci_status);
+    return '';
+  }
+  if(i===3){
+    if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
+    return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
+  }
+  return '';
+}
 function stepsHtml(w){
   const reached=new Set(w.reached||[]);reached.add(w.state);
-  const cur=MILESTONES.findIndex(([,ss])=>ss.includes(w.state));
-  const lis=MILESTONES.map(([label,ss],i)=>{
-    const done=cur===-1?ss.some(s=>reached.has(s)):i<cur;
-    const cls=i===cur?'now':done?'done':'';
-    return `<li class="${cls}"><span class="mk">${done?'✓':''}</span>${label}</li>`;
-  });
-  if(cur===-1){
-    const bad=!!BADSTATES[w.state];
-    lis.push(`<li class="${w.state==='COMPLETED'?'done':bad?'bad':'now'}"><span class="mk">${w.state==='COMPLETED'?'✓':bad?'✗':w.state==='NEEDS_INFO'?'?':''}</span>${w.state.replace(/_/g,' ').toLowerCase()}${w.failure_reason?': '+esc(w.failure_reason):''}</li>`);
+  const off=OFFTRACK[w.state];
+  let cur=-1;
+  if(off===undefined){
+    cur=STEPS.findIndex(([,ss])=>ss.includes(w.state));
   }
-  return lis.join('');
+  const lis=STEPS.map(([label,ss],i)=>{
+    let cls='',mark='';
+    if(off!==undefined){
+      if(i<off){cls='done';mark='✓'}
+      else if(i===off){cls='bad';mark='✗'}
+    }else{
+      const done=i<cur||(cur!==-1&&w.state==='COMPLETED');
+      if(done){cls='done';mark='✓'}
+      else if(i===cur){cls='now'}
+    }
+    const note=stepNote(w,i);
+    return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label}</span>${note?`<span class="st-note">${note}</span>`:''}</div></li>`;
+  }).join('');
+  return `<ul class="milestones">${lis}</ul>`;
 }
-function renderProof(w){
-  const inv=w.investigation||{},rem=w.remediation||{};
-  $('#proof').style.display='';
-  $('#p-title').innerHTML=`<a href="/issues/${w.issue_number}">#${w.issue_number} ${esc(w.title||'')}</a>`;
-  $('#p-impact').textContent=inv.observed_behavior||inv.summary||'–';
-  $('#p-found').textContent=inv.root_cause||'–';
-  $('#p-fix').textContent=rem.fix_summary||rem.summary||'–';
-  const checks=[
-    ['Original failure reproduced',!!inv.reproduced],
-    [`Regression tests added${(rem.regression_tests_added||[]).length?` (${rem.regression_tests_added.length})`:''}`,!!(rem.regression_tests_added||[]).length],
-    ['Original reproduction now passes',!!rem.reproduction_rerun_passed],
-    ['Verification passed',!!rem.verification_passed],
-    ['PR opened',!!w.pr_url],
-    w.ci_status==='passed'?['CI checks green',true]:['CI checks '+((w.ci_status)||'pending'),null],
-  ];
-  $('#p-checks').innerHTML=checks.map(([t,v])=>`<li class="${v===true?'':v===false?'fail':'pending'}">${v===true?'✓':v===false?'✗':'◌'} ${esc(t)}</li>`).join('');
-  const links=[];
-  if(w.pr_url)links.push(`<a href="${esc(w.pr_url)}" target="_blank">View PR →</a>`);
-  links.push(`<a href="/issues/${w.issue_number}">View investigation →</a>`);
-  const ana=w.sessions?.find(s=>s.role==='analyst');
-  if(ana?.url)links.push(`<a href="${esc(ana.url)}" target="_blank">View analysis →</a>`);
-  $('#p-links').innerHTML=links.join('&nbsp;&nbsp;');
+function sessionsHtml(w){
+  const ss=(w.sessions||[]);
+  if(!ss.length)return '';
+  const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
+  return `<div class="sesslist small">${ss.map(s=>{
+    const span=s.finished_at?`${hm(s.created_at)}–${hm(s.finished_at)}`:`${hm(s.created_at)} · running`;
+    return `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${roleLabel[s.role]||esc(s.role)} ↗</a><span class="muted">${span}${s.acus!=null?` · ${(+s.acus).toFixed(1)} ACU`:''}</span>`;
+  }).join('<span class="muted"> · </span>')}</div>`;
+}
+function rowHtml(w){
+  const n=w.issue_number;
+  const waiting=w.waiting_for_seconds!=null?` · ${dur(w.waiting_for_seconds)}`:'';
+  return `<div class="wl-item">
+    <div class="wl-head">
+      <span class="caret">▸</span>
+      <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>#${n}</b></a> ${esc(w.title||'')} ${originTag(w)} ${prBadge(w)}</span>
+      <span class="wl-state">${outcome(w)}<span class="muted small">${waiting}</span></span>
+    </div>
+    <div class="wl-body">
+      ${stepsHtml(w)}
+      ${sessionsHtml(w)}
+      <div class="wl-meta small muted">
+        ${w.discovered_at?`discovered ${new Date(w.discovered_at).toLocaleDateString()}`:''}${w.failure_reason&&w.state!=='SKIPPED'?` · ${esc(w.failure_reason)}`:''}
+      </div>
+      <div class="small" style="margin-top:6px"><a href="${esc(w.issue_url||'#')}" target="_blank">GitHub issue →</a> &nbsp;·&nbsp; <a href="/issues/${n}">Full detail →</a></div>
+    </div>
+  </div>`;
 }
 async function load(){
   const [m,ws,h]=await Promise.all([fetch('/api/metrics').then(r=>r.json()),fetch('/api/workflows').then(r=>r.json()),fetch('/healthz').then(r=>r.json())]);
   repo=h.target_repo;$('#repo').textContent=repo+(h.dry_run?' · DRY RUN':'');
   const e=m.executive||{},g=m.groups;
-  $('#k-handled').textContent=e.bugs_handled??'–';
-  $('#k-discovered-sub').textContent=e.defects_discovered?`${e.defects_discovered} defects auto-discovered`:`${g.skipped} skipped without cost`;
-  $('#k-fixes').textContent=e.verified_fixes??'–';
-  $('#k-ci').textContent=`${g.ci_pending||0} awaiting CI`;
-  $('#k-ttf').textContent=dur(e.median_time_to_fix);
-  $('#k-human').textContent=e.needs_human??'–';
+  $('#k-open').textContent=e.issues_open??'–';
+  $('#k-open-sub').textContent=`${(g.skipped||0)+(g.not_reproducible||0)} closed out without a fix`;
+  $('#k-progress').textContent=e.in_progress??'–';
+  $('#k-progress-sub').textContent=`${m.active_sessions} active Devin sessions · ${(+m.total_acus).toFixed(1)} ACUs`;
+  $('#k-human').textContent=e.awaiting_human??'–';
+  $('#k-human-sub').textContent=`${e.awaiting_review||0} for review · ${e.awaiting_input||0} need input · ${e.awaiting_blocked||0} blocked`;
+  $('#k-solved').textContent=e.solved??'–';
+  const pct=e.merged_without_changes_pct==null?'–':Math.round(e.merged_without_changes_pct*100)+'%';
+  $('#k-solved-sub').textContent=`${pct} merged without changes · median fix ${dur(e.median_time_to_fix)} excl. waiting`;
   ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
-  $('#worklist').innerHTML=ws.map(w=>{
-    const n=w.issue_number;
-    const waiting=w.waiting_for_seconds!=null?` · waiting ${dur(w.waiting_for_seconds)}`:'';
-    const human=humanNeeded(w);
-    return `<div class="wl-item">
-      <div class="wl-head">
-        <span class="caret">▸</span>
-        <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>#${n}</b></a> ${esc(w.title||'')} ${originTag(w)}</span>
-        <span class="wl-state">${outcome(w)}<span class="muted small">${waiting}</span></span>
-      </div>
-      <div class="wl-body">
-        <ul class="milestones">${stepsHtml(w)}</ul>
-        <div class="wl-meta small muted">${evidence(w)}${human==='<span class="muted">—</span>'?'':' · needs '+human.toLowerCase()}</div>
-        <div class="small" style="margin-top:6px"><a href="/issues/${n}">Open details →</a>${w.pr_url?` &nbsp;·&nbsp; <a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()} →</a>`:''}</div>
-      </div>
-    </div>`;
-  }).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</div>';
-  const latest=ws.filter(w=>w.pr_url).sort((a,b)=>(b.pr_opened_at||'').localeCompare(a.pr_opened_at||''))[0];
-  if(latest){
-    fetch(`/api/workflows/${repo}/${latest.issue_number}`).then(r=>r.ok?r.json():null).then(d=>{if(d)renderProof(d)}).catch(()=>{});
-  }else{$('#proof').style.display='none'}
-  // Operations
-  const max=Math.max(1,...Object.values(m.funnel));
-  $('#funnel').innerHTML=Object.entries(m.funnel).map(([k,v])=>`<div class="row"><span>${esc(k)}</span><div class="bar"><i style="width:${v/max*100}%"></i></div><b>${v}</b></div>`).join('');
-  const md=m.medians,r=m.rates,t=m.throughput;
-  $('#delivery').innerHTML=[
-    ['Median discovered → triage start',dur(md.discovered_to_triage_start)],
-    ['Median discovered → investigation start',dur(md.discovered_to_investigation_start)],
-    ['Median discovered → reproduced',dur(md.discovered_to_reproduced)],
-    ['Median discovered → root cause',dur(md.discovered_to_root_cause)],
-    ['Median discovered → PR opened',dur(md.discovered_to_pr_opened)],
-    ['PRs opened last 24h / 7d',`${t.prs_opened_last_24h} / ${t.prs_opened_last_7d}`],
-    ['Reproduction rate',Math.round(r.reproduction_rate*100)+'%'],
-    ['Verified-fix rate',Math.round(r.verified_fix_rate*100)+'%'],
-    ['Needs-info rate',Math.round(r.needs_info_rate*100)+'%'],
-    ['Triage skip rate',Math.round(r.triage_skip_rate*100)+'%'],
-  ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
-  $('#ops-cost').innerHTML=[
-    ['Active Devin sessions',`${m.active_sessions} / ${m.max_concurrent} (${Math.round(m.utilization*100)}%)`],
-    ['Total ACUs',m.total_acus.toFixed(1)],
-    ['ACUs per completed PR',m.acus_per_completed_pr.toFixed(1)],
-    ['ACUs per verified fix',e.acus_per_verified_fix==null?'–':(+e.acus_per_verified_fix).toFixed(1)],
-  ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
-  $('#ops-pipe').innerHTML=[
-    ['Discovered',g.discovered],['Queued',m.counts.QUEUED],['Actively working',g.active],
-    ['Waiting for human',g.waiting_for_human],['Awaiting CI',g.ci_pending||0],
-    ['Skipped / filtered',g.skipped],['Completed',g.completed],
-    ['Blocked / failed',g.blocked_failed],['Not reproducible',g.not_reproducible],
-  ].map(([k,v])=>`<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('');
-  $('#ops-states').innerHTML=Object.entries(m.counts).filter(([,v])=>v).map(([k,v])=>`<tr><td><span class="pill ${k}">${k.replace(/_/g,' ')}</span></td><td><b>${v}</b></td></tr>`).join('');
-  $('#lanes').innerHTML=LANES.map(([name,states])=>{const items=ws.filter(w=>states.includes(w.state));return `<div class="lane"><h3>${name} <span class="muted">${items.length}</span></h3><div class="items">${items.map(w=>`<a class="chip" href="/issues/${w.issue_number}">#${w.issue_number} <span class="muted">${esc((w.title||'').slice(0,48))}</span></a>`).join('')||'<span class="muted small">—</span>'}</div></div>`}).join('');
+  $('#worklist').innerHTML=ws.map(rowHtml).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</div>';
   $('#updated').textContent=new Date().toLocaleTimeString();
 }
 $('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='Polling…';

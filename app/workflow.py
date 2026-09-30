@@ -150,9 +150,19 @@ class WorkflowEngine:
                 continue
             try:
                 pull = await self.github.get_pull(workflow["repo"], workflow["pr_number"])
+                head_sha = (pull.get("head") or {}).get("sha")
+                if head_sha and not workflow.get("pr_head_sha"):
+                    self.store.set_state(workflow["id"], workflow["state"],
+                                         pr_head_sha=head_sha)
+                    workflow["pr_head_sha"] = head_sha
                 if pull.get("merged"):
+                    clean = (
+                        head_sha is not None
+                        and workflow.get("pr_head_sha") == head_sha
+                    )
                     self.store.set_state(workflow["id"], State.COMPLETED,
-                                         completed_at=utcnow())
+                                         completed_at=utcnow(),
+                                         merged_without_changes=1 if clean else 0)
                     continue
                 if pull.get("state") == "closed":
                     self.store.set_state(
@@ -578,8 +588,12 @@ class WorkflowEngine:
             tags=tags, structured_output_schema=schema,
             max_acu_limit=limit if self.settings.max_acu_limit is None else min(limit, self.settings.max_acu_limit),
         )
+        session_url = session.get("url") or (
+            f"https://app.devin.ai/sessions/"
+            f"{session['session_id'].removeprefix('devin-')}"
+        )
         self.store.record_session(session_id=session["session_id"], workflow_id=workflow["id"],
-                                  role=role.value, url=session.get("url", ""), active=1)
+                                  role=role.value, url=session_url, active=1)
         self.store.add_event(workflow["id"], "session_created", detail={"session_id": session["session_id"],
                                                                         "role": role.value})
         return session

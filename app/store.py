@@ -104,6 +104,10 @@ class Store:
                 "origin": "TEXT DEFAULT 'HUMAN_REPORTED'",
                 "parent_issue_number": "INTEGER",
                 "discovered_by_session_id": "TEXT",
+                # PR head sha recorded when the PR was first seen; compared at
+                # merge time to detect whether humans pushed extra commits.
+                "pr_head_sha": "TEXT",
+                "merged_without_changes": "INTEGER",
             })
 
     @staticmethod
