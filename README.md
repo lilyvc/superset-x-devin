@@ -358,7 +358,6 @@ GitHub comment writes while keeping the same state-machine path.
 | `DEVIN_API_BASE_URL` | `https://api.devin.ai` | Devin API base URL |
 | `DEVIN_ORG_ID` | empty | Required with a PAT; selects the org-scoped v3 API. A service-user key uses v1 |
 | `DRY_RUN` | `false` | Fake Devin sessions and log comments instead of external writes |
-| `POLL_INTERVAL_SECONDS` / `POLL_TIMEOUT_SECONDS` | `10` / `1800` | Legacy summary-orchestrator polling interval / timeout |
 | `MAX_ACU_LIMIT` | unset | Optional global cap applied to each created session |
 | `ELIGIBILITY_LABEL` | empty | Empty means autonomous intake of every open issue; set a label to restrict intake to issues carrying it |
 | `TRIAGE_ENABLED` | `true` | Run the cheap Triage Devin before the Investigator |
@@ -378,7 +377,6 @@ GitHub comment writes while keeping the same state-machine path.
 | `SESSION_STALL_SECONDS` | `5400` | Nudge a Devin session that never settles; escalate the workflow at twice this |
 | `ADMIN_TOKEN` | empty | Bearer token for `POST /admin/poll-now`; required for that endpoint |
 | `MAX_TOTAL_ACUS` | unset | Organization-level ACU budget ceiling across all sessions |
-| `REMEDIATION_LABEL` | empty | Legacy orchestrator label setting; the active engine records `remediation_started_at` |
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose overrides it to `/data/orchestrator.db` |
 | `ENABLE_POLLING` | `false` | Start the GitHub poller and run a startup tick |
 | `GITHUB_POLL_INTERVAL_SECONDS` | `30` | GitHub discovery/comment polling interval |

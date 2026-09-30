@@ -32,14 +32,9 @@ class Settings:
     # so the full pipeline can be exercised without credentials.
     dry_run: bool = _env_bool("DRY_RUN", False)
 
-    poll_interval_seconds: float = float(os.getenv("POLL_INTERVAL_SECONDS", "10"))
-    poll_timeout_seconds: float = float(os.getenv("POLL_TIMEOUT_SECONDS", "1800"))
     max_acu_limit: int | None = (
         int(os.getenv("MAX_ACU_LIMIT")) if os.getenv("MAX_ACU_LIMIT") else None
     )
-
-    # Optional label applied to issues once a Devin session has been dispatched.
-    remediation_label: str = os.getenv("REMEDIATION_LABEL", "")
 
     # Intake is autonomous by default: every open issue is discovered and
     # triaged. Setting a label restricts intake to issues carrying it.

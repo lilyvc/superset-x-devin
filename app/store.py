@@ -54,13 +54,6 @@ class Store:
                 CREATE TABLE IF NOT EXISTS deliveries (
                     delivery_id TEXT PRIMARY KEY, received_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS issues (
-                    repo TEXT NOT NULL, issue_number INTEGER NOT NULL,
-                    session_id TEXT, session_url TEXT, status TEXT NOT NULL,
-                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                    last_comment_id INTEGER DEFAULT 0,
-                    PRIMARY KEY (repo, issue_number)
-                );
                 CREATE TABLE IF NOT EXISTS workflows (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     repo TEXT NOT NULL, issue_number INTEGER NOT NULL,
@@ -259,37 +252,6 @@ class Store:
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM sessions WHERE active=1 ORDER BY created_at").fetchall()
         return [_decode(r, JSON_SESSION_FIELDS) for r in rows]
-
-    # Compatibility methods retained for old callers and migration safety.
-    def record_dispatch(self, repo, issue_number, session_id, session_url, status):
-        workflow = self.get_workflow(repo, issue_number) or self.upsert_workflow(
-            repo, issue_number, state="QUEUED"
-        )
-        self.record_session(session_id=session_id, workflow_id=workflow["id"],
-                            role="investigator", url=session_url, devin_status=status)
-
-    def update_status(self, repo, issue_number, status):
-        with self._conn() as conn:
-            conn.execute("UPDATE issues SET status=?,updated_at=? WHERE repo=? AND issue_number=?",
-                         (status, utcnow(), repo, issue_number))
-
-    def set_last_comment_id(self, repo, issue_number, comment_id):
-        workflow = self.get_workflow(repo, issue_number)
-        if workflow:
-            self.set_state(workflow["id"], workflow["state"], last_comment_id=comment_id)
-        with self._conn() as conn:
-            conn.execute("UPDATE issues SET last_comment_id=?,updated_at=? WHERE repo=? AND issue_number=?",
-                         (comment_id, utcnow(), repo, issue_number))
-
-    def list_tracked_issues(self):
-        with self._conn() as conn:
-            return [dict(r) for r in conn.execute("SELECT * FROM issues WHERE session_id IS NOT NULL")]
-
-    def get_issue(self, repo, issue_number):
-        with self._conn() as conn:
-            row = conn.execute("SELECT * FROM issues WHERE repo=? AND issue_number=?",
-                               (repo, issue_number)).fetchone()
-        return dict(row) if row else None
 
     def record_issue_origin(self, repo: str, issue_number: int, origin: str,
                             parent_issue_number: int | None = None,

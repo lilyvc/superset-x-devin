@@ -15,9 +15,7 @@ structured-output gates. Intake is autonomous: no trigger label is required.
       `app/store.py`, and GitHub deliveries are deduplicated by delivery ID;
       `app/devin_client.py`, `app/workflow.py`, `app/store.py`.
 - [x] **Mark remediation started** — remediation dispatch records
-      `remediation_started_at` in the workflow; the legacy compatibility path
-      also supports `REMEDIATION_LABEL` in `app/orchestrator.py`;
-      `app/workflow.py`, `app/orchestrator.py`.
+      `remediation_started_at` in the workflow; `app/workflow.py`.
 - [x] **Devin remediation workflow** — investigation, clarification, root
       cause, remediation, verification, PR reconciliation, and analyst
       follow-up are implemented with schemas, prompts, gates, comments, and

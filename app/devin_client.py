@@ -7,7 +7,7 @@ Two auth modes:
 
 v3 sessions report `status` (new|claimed|running|suspended|resuming|exit|error)
 plus a `status_detail` (working|waiting_for_user|inactivity|...) instead of v1's
-`status_enum`; the orchestrator handles both.
+`status_enum`; app/devin_status.py normalizes both.
 """
 
 import itertools
@@ -105,23 +105,3 @@ class DevinClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
-
-
-SUMMARY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {
-            "type": "string",
-            "description": "A concise markdown summary of the GitHub issue, suitable for posting as a comment.",
-        },
-        "severity_guess": {
-            "type": "string",
-            "description": "One of: bug, feature_request, question, docs, chore, unknown.",
-        },
-        "suggested_next_step": {
-            "type": "string",
-            "description": "The single most useful next action for a maintainer.",
-        },
-    },
-    "required": ["summary"],
-}
