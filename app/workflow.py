@@ -72,13 +72,23 @@ class WorkflowEngine:
     def _admit(self, issue: dict) -> tuple[dict, str | None]:
         provenance = self.store.get_issue_origin(
             self.settings.target_repo, issue["number"])
+        labels = list(issue_labels(issue))
+        # Issues filed by a Retro Devin carry the analysis label — treat them
+        # as Devin-discovered even when the parent workflow isn't tracked here
+        # (e.g. backlog polling), so they get fixed but never spawn a retro.
+        origin = (provenance or {}).get("origin")
+        if origin is None:
+            origin = (Origin.DEVIN_DISCOVERED.value
+                      if self.settings.analysis_label in
+                      [str(l).lower() for l in labels]
+                      else Origin.HUMAN_REPORTED.value)
         workflow = self.store.upsert_workflow(
             self.settings.target_repo, issue["number"], title=issue.get("title", ""),
             issue_url=issue.get("html_url", ""),
             author=(issue.get("user") or {}).get("login", ""),
-            labels=list(issue_labels(issue)), state=State.DISCOVERED.value,
+            labels=labels, state=State.DISCOVERED.value,
             discovered_at=utcnow(),
-            origin=(provenance or {}).get("origin", Origin.HUMAN_REPORTED.value),
+            origin=origin,
             parent_issue_number=(provenance or {}).get("parent_issue_number"),
             discovered_by_session_id=(provenance or {}).get("session_id"),
         )

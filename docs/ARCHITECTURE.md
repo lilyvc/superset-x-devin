@@ -168,7 +168,7 @@ The same bot and self filters as issue replies apply.
 
 The `issue_origins` table records each issue's origin, parent issue number, Devin session ID, and creation time.
 The workflow row stores `origin`, `parent_issue_number`, and `discovered_by_session_id`.
-When the Retro Devin records a follow-up issue, the engine links it to the parent workflow and session. Issues with `DEVIN_DISCOVERED` provenance never get a retro of their own, so follow-ups cannot recurse into more follow-ups. An origin is recorded only when the follow-up issue is not already tracked.
+When the Retro Devin records a follow-up issue, the engine links it to the parent workflow and session. Issues with `DEVIN_DISCOVERED` provenance never get a retro of their own, so follow-ups cannot recurse into more follow-ups. An origin is recorded only when the follow-up issue is not already tracked. Issues discovered via polling that carry the `devin-analysis` label are also treated as `DEVIN_DISCOVERED` — they are triaged and fixed like any issue, they just cannot spawn a retro.
 The poller later discovers the issue and applies the stored provenance.
 The dashboard marks human-reported issues and Devin-discovered issues.
 The issue page shows parent and child links.

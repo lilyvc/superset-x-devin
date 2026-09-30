@@ -48,7 +48,7 @@ class Settings:
         label.strip().lower()
         for label in os.getenv(
             "IGNORE_LABELS",
-            "question,duplicate,invalid,wontfix,discussion,rfc,sip,devin-analysis",
+            "question,duplicate,invalid,wontfix,discussion,rfc,sip",
         ).split(",")
         if label.strip()
     )
@@ -86,6 +86,7 @@ class Settings:
     # twice this long the workflow is escalated for a human. 0 = never.
     session_stall_seconds: float = float(os.getenv("SESSION_STALL_SECONDS", "5400"))
     analysis_enabled: bool = _env_bool("ANALYSIS_ENABLED", True)
+    analysis_label: str = os.getenv("ANALYSIS_LABEL", "devin-analysis")
     investigator_acu_limit: int = int(os.getenv("INVESTIGATOR_ACU_LIMIT", "10"))
     remediator_acu_limit: int = int(os.getenv("REMEDIATOR_ACU_LIMIT", "25"))
     analyst_acu_limit: int = int(os.getenv("ANALYST_ACU_LIMIT", "8"))
