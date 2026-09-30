@@ -639,7 +639,7 @@ def test_role_devin_modes(tmp_path):
         modes[role] = c["devin_mode"]
     assert modes["triage"] == "lite"
     assert modes["investigator"] is None
-    assert modes["remediator"] == "ultra"
+    assert modes["remediator"] == "fusion"
     assert modes["analyst"] is None
 
 

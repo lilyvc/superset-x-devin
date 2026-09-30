@@ -92,12 +92,12 @@ class Settings:
     analyst_acu_limit: int = int(os.getenv("ANALYST_ACU_LIMIT", "8"))
 
     # Devin agent mode per role (the sessions API `devin_mode` field). Cheap,
-    # short-verdict roles run lite; remediation gets the strongest mode.
+    # short-verdict roles run lite; remediation uses multi-model fusion.
     # Empty = the organization's default mode.
     triage_mode: str = os.getenv("TRIAGE_DEVIN_MODE", "lite")
     dedup_mode: str = os.getenv("DEDUP_DEVIN_MODE", "lite")
     investigator_mode: str = os.getenv("INVESTIGATOR_DEVIN_MODE", "")
-    remediator_mode: str = os.getenv("REMEDIATOR_DEVIN_MODE", "ultra")
+    remediator_mode: str = os.getenv("REMEDIATOR_DEVIN_MODE", "fusion")
     analyst_mode: str = os.getenv("ANALYST_DEVIN_MODE", "")
 
     db_path: str = os.getenv("DB_PATH", "orchestrator.db")
