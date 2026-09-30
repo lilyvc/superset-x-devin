@@ -24,13 +24,12 @@
   </div>
 
   <section class="card">
-    <h2>Autonomous work</h2>
-    <table><thead><tr><th>Issue</th><th>Outcome</th><th>Evidence</th><th>Human needed</th></tr></thead>
-    <tbody id="rows"></tbody></table>
+    <h2>Issues</h2>
+    <div class="worklist" id="worklist"></div>
   </section>
 
   <section class="proof" id="proof" style="display:none">
-    <div class="kicker">Latest autonomous fix</div>
+    <div class="kicker">Latest verified fix</div>
     <h3 id="p-title"></h3>
     <dl>
       <dt>Impact</dt><dd id="p-impact"></dd>
@@ -110,6 +109,15 @@ function humanNeeded(w){
   if(w.state==='BLOCKED'||w.state==='ESCALATED')return 'Maintainer';
   return '<span class="muted">—</span>';
 }
+const STEPSEQ=['DISCOVERED','TRIAGING','QUEUED','INVESTIGATING','REPRODUCED','ROOT_CAUSE_FOUND','REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING','READY_FOR_REVIEW'];
+const BADSTATES={NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1,SKIPPED:1};
+function stepsHtml(w){
+  const reached=new Set(w.reached||[]);reached.add(w.state);
+  let html=STEPSEQ.map(s=>`<div class="step ${s===w.state?'now':reached.has(s)?'done':''}">${s.replace(/_/g,' ')}</div>`).join('');
+  if(BADSTATES[w.state]||w.state==='NEEDS_INFO'||w.state==='COMPLETED')
+    html+=`<div class="step ${BADSTATES[w.state]?'bad':w.state==='COMPLETED'?'done':'now'}" style="flex:1">${w.state.replace(/_/g,' ')}${w.failure_reason?': '+esc(w.failure_reason):''}</div>`;
+  return html;
+}
 function renderProof(w){
   const inv=w.investigation||{},rem=w.remediation||{};
   $('#proof').style.display='';
@@ -144,11 +152,23 @@ async function load(){
   $('#k-ttf').textContent=dur(e.median_time_to_fix);
   $('#k-human').textContent=e.needs_human??'–';
   ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
-  $('#rows').innerHTML=ws.map(w=>{
+  $('#worklist').innerHTML=ws.map(w=>{
     const n=w.issue_number;
-    const waiting=w.waiting_for_seconds!=null?` <span class="muted small">waiting ${dur(w.waiting_for_seconds)}</span>`:'';
-    return `<tr><td><a href="/issues/${n}"><b>#${n}</b></a> ${esc(w.title||'')}<br>${originTag(w)}</td><td>${outcome(w)}${waiting}</td><td class="small">${evidence(w)}</td><td>${humanNeeded(w)}</td></tr>`;
-  }).join('')||'<tr><td colspan="4" class="muted">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</td></tr>';
+    const waiting=w.waiting_for_seconds!=null?` · waiting ${dur(w.waiting_for_seconds)}`:'';
+    const human=humanNeeded(w);
+    return `<div class="wl-item">
+      <div class="wl-head">
+        <span class="caret">▸</span>
+        <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>#${n}</b></a> ${esc(w.title||'')} ${originTag(w)}</span>
+        <span class="wl-state">${outcome(w)}<span class="muted small">${waiting}</span></span>
+      </div>
+      <div class="wl-body">
+        <div class="steps">${stepsHtml(w)}</div>
+        <div class="wl-meta small muted">${evidence(w)}${human==='<span class="muted">—</span>'?'':' · needs '+human.toLowerCase()}</div>
+        <div class="small" style="margin-top:6px"><a href="/issues/${n}">Open details →</a>${w.pr_url?` &nbsp;·&nbsp; <a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_url.split('/').pop()} →</a>`:''}</div>
+      </div>
+    </div>`;
+  }).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo, or click “Poll now”.</div>';
   const latest=ws.filter(w=>w.pr_url).sort((a,b)=>(b.pr_opened_at||'').localeCompare(a.pr_opened_at||''))[0];
   if(latest){
     fetch(`/api/workflows/${repo}/${latest.issue_number}`).then(r=>r.ok?r.json():null).then(d=>{if(d)renderProof(d)}).catch(()=>{});
@@ -195,6 +215,11 @@ $('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='P
     if(!r.ok)console.error('poll-now failed',r.status);
     await load()
   }finally{b.disabled=false;b.textContent='Poll now'}};
+$('#worklist').addEventListener('click',e=>{
+  const head=e.target.closest('.wl-head');
+  if(!head||e.target.closest('a'))return;
+  head.parentElement.classList.toggle('open');
+});
 load().catch(console.error);setInterval(()=>load().catch(console.error),5000);
 </script>
 </body></html>

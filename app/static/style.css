@@ -64,6 +64,20 @@ pre{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10
 .step.now{background:var(--accent-soft);color:var(--accent);border-color:#c3d0f8}
 .step.bad{background:var(--bad-soft);color:var(--bad)}
 .ev{padding-left:18px}.ev li{margin:3px 0}
+.worklist{max-height:560px;overflow-y:auto;margin:0 -6px}
+.wl-item{border-bottom:1px solid var(--line-soft)}
+.wl-item:last-child{border-bottom:0}
+.wl-head{display:flex;align-items:center;gap:10px;padding:10px 6px;cursor:pointer}
+.wl-head:hover{background:#f8fafc}
+.wl-head .caret{color:var(--faint);font-size:11px;width:10px;transition:transform .12s}
+.wl-item.open .wl-head .caret{transform:rotate(90deg)}
+.wl-title{flex:1;min-width:0}
+.wl-state{white-space:nowrap}
+.wl-body{display:none;padding:2px 6px 14px 26px}
+.wl-item.open .wl-body{display:block}
+.wl-body .steps{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.wl-body .steps .step{padding:5px 8px;font-size:11px}
+.wl-meta{margin-top:2px}
 .origin{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:12px;white-space:nowrap}
 .origin.devin{color:var(--accent)}
 details.ops{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}

@@ -122,6 +122,10 @@ async def list_workflows(request: Request):
         else:
             item["waiting_for_seconds"] = None
         item["sessions"] = _session_summary(store, row["id"])
+        reached = {e.get("to_state") for e in store.get_events(row["id"])
+                   if e.get("to_state")}
+        reached.add(row["state"])
+        item["reached"] = sorted(reached)
         result.append(item)
     return result
 
