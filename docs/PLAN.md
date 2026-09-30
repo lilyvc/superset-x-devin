@@ -10,8 +10,10 @@
 - Human replies can resume an active session or start a recovery session.
 - Comments on a tracked PR — conversation, review comments, and review bodies — reach the Remediator session, or resume it when finished.
 - Once a fix PR exists, the Retro Devin analyses the defect family and files follow-up issues. Devin-discovered issues never get a retro of their own, so follow-ups cannot recurse.
+- Completed analyses feed back into new Investigator and Retro prompts as known defect families (the knowledge loop).
+- Each role dispatches with its own Devin agent mode (lite / org default / fusion) and ACU cap.
 - Admin requests and webhooks use bearer-token and signature checks.
-- ACU limits, issue provenance, the executive dashboard, and the architecture split are implemented.
+- Issue provenance, the executive dashboard, and the architecture split are implemented.
 - Workflow uniqueness, webhook delivery IDs, and session fingerprints support idempotent processing.
 
 ## Next work
@@ -23,8 +25,8 @@
 - Add retry backoff, jitter, and a dead-letter path for repeated API failures and poll timeouts.
 - Define a human-approved policy for Retro Devin follow-up issues or PRs.
 - Limit clarification rounds before the workflow escalates to a human.
-- **Proposal:** Add optional Devin Org Knowledge notes about issue patterns for later investigations.
-- **Proposal:** Add scheduled Devin code scans for proactive correctness checks.
+- **Proposal:** Add scheduled Devin code scans as a proactive discovery source — findings file issues, which enter the same pipeline as `DEVIN_DISCOVERED` workflows.
+- **Proposal:** A feedback loop that turns recurring reviewer/reply feedback into reviewed edits to the skill files.
 
 ## Non-goals
 

@@ -1,231 +1,61 @@
 # Architecture
 
-## Control plane and engineering plane
+## The one-paragraph version
 
-The Python service controls each workflow. It finds issues, stores state, checks evidence, and starts Devin sessions.
-Devin works in separate sessions. It investigates issues, prepares code changes, and opens PRs in the target repository.
-The service does not install a runtime or agent in the target repository.
+A Python service is the control plane; Devin sessions are the workforce. The service owns all decisions — it finds issues, dispatches role-specific Devin sessions with structured-output contracts, validates what comes back with deterministic Python gates, and tracks every workflow in SQLite. Devin does the work that needs judgment — reading vague reports, reproducing bugs, writing fixes, spotting defect families. Nothing is installed in the target repository.
 
-## Components
-
-| Module | Responsibility |
-|---|---|
-| `app/workflow.py` | Runs ticks, finds issues, reconciles sessions and PRs, forwards replies, and dispatches sessions |
-| `app/handlers.py` | Applies structured output from settled role sessions |
-| `app/gates.py` | Checks intake, investigation, verification, CI, and duplicate decisions |
-| `app/parsing.py` | Parses GitHub payloads, Devin sessions, dates, and output fingerprints |
-| `app/store.py` | Stores workflows, sessions, events, deliveries, and issue provenance in SQLite |
-| `app/prompts.py` | Defines role prompts, output schemas, and issue comments |
-| `app/github_client.py` | Reads issues, comments, PRs, files, and CI results; posts issue comments |
-| `app/devin_client.py` | Creates Devin sessions and reads or resumes session output |
-| `app/devin_status.py` | Normalizes Devin v1 and v3 session status and messages |
-| `app/main.py` | Creates the FastAPI service, routes, clients, store, and workflow engine |
-| `app/metrics.py` | Builds dashboard and API metrics from stored workflow data |
-| `app/poller.py` | Runs workflow ticks at the configured interval |
-| `app/static/` | Serves the dashboard and issue detail pages |
-
-## Workflow lifecycle
+## Lifecycle
 
 ```text
-Open GitHub issue
-    |
-    v
-DISCOVERED --> TRIAGING
-                  +--> SKIPPED
-                  +--> NEEDS_INFO --human reply--> QUEUED
-                  +--> QUEUED --> INVESTIGATING
-                                     +--> NEEDS_INFO --human reply--> INVESTIGATING
-                                     +--> NOT_REPRODUCIBLE --human reply--> role recovery
-                                     +--> BLOCKED --human reply--> role recovery
-                                     +--> FAILED or ESCALATED
-                                     +--> REPRODUCED --> ROOT_CAUSE_FOUND
-                                                              |
-                                                         dedup gate
-                                      +-----------------------+-----------------+
-                                      |                                         |
-                                   SKIPPED                              REMEDIATING
-                                                                        |
-                                                                    VERIFYING
-                                                                        +--> FAILED
-                                                                        +--> PR_OPENED
-                                                                               |
-                                                                  CI_REQUIRED?  |
-                                                               yes /           \ no
-                                                                  v             v
-                                                             CI_CHECKING   READY_FOR_REVIEW
-                                                                  |             |
-                                                                  +--> READY_FOR_REVIEW
-                                                                               |
-                                                        merged PR or closed issue
-                                                                               v
-                                                                          COMPLETED
+open issue
+  → DISCOVERED → TRIAGING → QUEUED → INVESTIGATING → ROOT_CAUSE_FOUND
+  → dedup gate → REMEDIATING → VERIFYING → PR_OPENED → CI_CHECKING
+  → READY_FOR_REVIEW → COMPLETED (merged)
+
+sideways exits: SKIPPED / NEEDS_INFO / NOT_REPRODUCIBLE / BLOCKED / FAILED / ESCALATED
+human replies forward into the active session — or resume/recover it
 ```
 
-An open PR that already links the issue as fixed makes the workflow `SKIPPED`.
-An uncertain duplicate puts the workflow in `BLOCKED` until a human reply resumes the Dedup session.
-A closed issue before the PR stage causes `ESCALATED`. A PR closed without a merge causes `FAILED`.
+Each `WorkflowEngine.tick` runs five steps in order: discover issues → reconcile sessions → reconcile PRs/CI → forward human replies → dispatch new sessions (within capacity and ACU budget).
 
-## Tick sequence
+## Roles
 
-`WorkflowEngine.tick` runs these steps in order:
+| Role | Default mode | Job | Gate that accepts its output |
+|---|---|---|---|
+| Triage | lite | Routes an issue: investigate, clarify, or skip | verdict → `QUEUED` / `NEEDS_INFO` / `SKIPPED` |
+| Investigator | org default | Reproduces the bug in a dev environment | `investigation_gate`: `REPRODUCED` + all evidence fields non-empty |
+| Dedup | lite | Is an open PR already fixing this? | `DUPLICATE` → `SKIPPED`; `PROCEED` → continue |
+| Remediator | fusion | Writes the fix + regression tests, opens PR | `verification_gate`: `PR_OPENED` + every test passed + reproduction re-ran green |
+| Retro Devin (`analyst`) | org default | Maps the defect family, files follow-up issues | none — advisory; follow-ups enter as normal issues |
 
-1. Discover open issues. Apply intake filters, provenance, and the per-poll issue limit.
-2. Reconcile active Devin sessions. Apply settled output and check for stalled sessions.
-3. Reconcile open PRs and, when required, check the PR head commit's CI results.
-4. Read issue comments after the stored comment cursor. Forward new human replies.
-5. Dispatch new Devin sessions while capacity and the ACU budget allow.
+Dispatch order per tick: Remediator → Retro Devin → Investigator → Triage.
+`MAX_CONCURRENT_DEVINS` caps parallel sessions; `MAX_TOTAL_ACUS` stops dispatch at the budget; `SESSION_STALL_SECONDS` nudges then escalates stuck sessions. Per-role ACU caps and agent modes are in `docs/OPERATIONS.md`.
 
-The dispatcher uses this order:
+Two deterministic gates sit between agents and progress:
 
-| Order | Role | Condition |
-|---:|---|---|
-| 1 | Remediator | Investigation reached `ROOT_CAUSE_FOUND`; the duplicate gate is clear |
-| 2 | Retro Devin (`analyst` role) | `ANALYSIS_ENABLED=true`; state is `PR_OPENED`, `CI_CHECKING`, `READY_FOR_REVIEW`, or `COMPLETED` — defect-family analysis only runs once a fix PR exists, so failed remediations cost no analyst ACUs; never runs on `DEVIN_DISCOVERED` issues |
-| 3 | Investigator | Workflow state is `QUEUED` |
-| 4 | Triage | Workflow state is `DISCOVERED` and `TRIAGE_ENABLED=true` |
+- **Dedup gate** — scans open PRs for a closing reference (→ `SKIPPED`), then sends ambiguous candidates to a cheap Dedup session; `PROCEED` clears it.
+- **CI gate** — `READY_FOR_REVIEW` only when the PR head commit's GitHub checks exist and none are pending/failing. No checks = `unverified`, not a pass.
 
-`MAX_CONCURRENT_DEVINS` limits active sessions across roles.
-`MAX_TOTAL_ACUS` stops new session dispatch when recorded session ACUs reach the configured total.
-The engine records one `budget_exceeded` event when this limit stops dispatch.
-After `SESSION_STALL_SECONDS`, the engine nudges a stalled session once. At twice that interval, it escalates the workflow.
+## Knowledge loop and provenance
 
-### Knowledge loop
+Every completed Retro analysis is stored on its workflow. New Investigator and Retro prompts include the repo's recent defect-family findings (`known_defects_block` in `app/prompts.py`), so recurring patterns are recognized instead of rediscovered. Retro-filed issues carry `DEVIN_DISCOVERED` provenance: they are triaged and fixed like any issue but never get a retro of their own — follow-ups cannot recurse.
 
-Every completed Retro Devin analysis is stored on its workflow (`analysis`
-column). New Investigator and Retro Devin sessions receive the recent
-defect-family findings for the repo in their prompts (`known_defects_block`
-in `app/prompts.py`), so the system recognizes recurring failure patterns
-across issues instead of starting each investigation from zero.
+## Replies and recovery
 
-## Devin roles and gates
+Issue comments and PR review comments/reviews are forwarded to the active session; with no active session, the engine resumes the last eligible one, or spawns a recovery session carrying prior findings + the new context. `NOT_REPRODUCIBLE` and `BLOCKED` workflows re-open the same way on a reporter reply.
 
-| Role | Work |
-|---|---|
-| Triage | Routes an issue to investigation, clarification, or a skip reason |
-| Investigator | Reproduces an issue and reports root-cause evidence |
-| Remediator | Changes code, runs tests, and reports PR verification |
-| Dedup | Checks whether a candidate open PR already fixes the issue |
-| Retro Devin (`analyst` role) | Reports related issues and engineering risks; files a `devin-analysis` follow-up issue for the defect family |
+## Persistence
 
-### Intake and triage
+SQLite (`app/store.py`): `workflows` (state + structured outputs), `sessions` (role, ACUs, fingerprints), `events`, `deliveries` (webhook dedup), `issue_origins` (provenance). Session creation is `idempotent`; on restart the engine reconciles stored sessions before dispatching anything new — the pipeline is resumable at every point.
 
-Python filters pull requests, missing eligibility labels, ignored labels, ignored issue types, and issues beyond `ISSUE_LOOKBACK_DAYS`.
-The Triage session returns `ACTIONABLE`, `NEEDS_INFO`, or `SKIP`.
-The engine maps these results to `QUEUED`, `NEEDS_INFO`, or `SKIPPED`.
-Set `TRIAGE_ENABLED=false` to queue admitted issues without a Triage session.
+## Dashboard
 
-### Investigation gate
+`/api/metrics` + `/api/workflows` feed two pages: the list (4 KPI cards, expandable per-issue tracker with session links) and the issue page (same tracker + evidence panel + "Related defect analysis" step + provenance box). `Waiting on a human` = `READY_FOR_REVIEW` + `NEEDS_INFO` + `BLOCKED` + `FAILED` + `ESCALATED`.
 
-`investigation_gate` accepts output only when every condition below is true:
+## Security
 
-1. `status` equals `REPRODUCED`.
-2. `enough_information` and `reproduced` are `true`.
-3. `expected_behavior`, `observed_behavior`, and `root_cause` are non-empty strings.
-4. `reproduction_steps`, `reproduction_evidence`, and `verification_plan` each contain an item.
+`POST /webhooks/github` requires an HMAC signature (`GITHUB_WEBHOOK_SECRET`), `/admin/*` requires `Authorization: Bearer $ADMIN_TOKEN` — both fail closed when unset. Dashboard pages have no built-in auth; run behind a trusted network or proxy.
 
-The gate moves accepted output through `REPRODUCED` and `ROOT_CAUSE_FOUND`.
-`NEEDS_INFO`, `NOT_REPRODUCIBLE`, and `BLOCKED` follow separate workflow paths.
-The engine asks once for missing structured fields. A second incomplete result moves the workflow to `BLOCKED`.
+## Modules
 
-### Duplicate gate
-
-- The engine scans open PR titles and bodies for a closing reference to the issue.
-- A matching reference makes the workflow `SKIPPED` with reason `DUPLICATE`.
-- The engine compares issue title, root cause, and affected components with PR titles and bodies.
-- It sends up to five PRs with at least two shared tokens to the Dedup session.
-- The session receives shared terms, changed files, and a body excerpt.
-- `DUPLICATE` moves the workflow to `SKIPPED`; `PROCEED` clears the gate; other verdicts move it to `BLOCKED`.
-- If GitHub cannot list open PRs, the engine records `dedup_skipped` and continues to remediation.
-- Set `DEDUP_ENABLED=false` to bypass this gate.
-
-### Verification and CI gates
-
-`verification_gate` accepts output only when all conditions below are true:
-
-1. `status` equals `PR_OPENED`.
-2. `verification_passed` and `reproduction_rerun_passed` are `true`.
-3. `tests_executed` contains at least one test, and every result equals `passed`.
-4. A PR URL exists in structured output or the session's pull requests.
-
-- The engine checks GitHub check runs and commit statuses for the PR head commit when `CI_REQUIRED=true`.
-- A check run that has not completed or a status with state `pending` keeps the workflow in `CI_CHECKING`.
-- A failing check conclusion or a status with state `failure` or `error` also keeps the workflow in `CI_CHECKING`.
-- The engine moves the workflow to `READY_FOR_REVIEW` only when checks exist and none are pending or failing.
-- No configured checks produce `unverified`, not a pass.
-- Failing check conclusions are `failure`, `timed_out`, `action_required`, and `cancelled`.
-- `CI_TIMEOUT_SECONDS` records a timeout event. It does not mark the PR as passed or failed.
-- Set `CI_REQUIRED=false` to skip this gate; the engine records `ci_status=skipped`.
-
-## Human replies and recovery
-
-The engine stores the latest issue comment ID and ignores bot comments and its own GitHub account.
-For an active Investigator or Remediator, it sends the human reply to the same session.
-For triage clarification without an active session, it queues a new Investigator session.
-For a blocked or not-reproducible workflow without an active session, it first tries to resume the latest eligible session.
-If resume fails, it creates a session with the blocker, question, and human reply in recovery context.
-The engine records reply, resume, and recovery events in SQLite.
-
-## Pull request feedback
-
-Once a workflow has a PR, the engine also reads three comment surfaces on it each tick, each with its own cursor because the id namespaces differ: conversation comments, inline review comments, and submitted review bodies (`CHANGES_REQUESTED` or `COMMENTED` only — approvals are not actionable).
-A human comment goes to an active Remediator session as a message.
-With no active Remediator, the engine resumes the last one and returns the workflow to `REMEDIATING`; if resume fails, it creates a Remediator session with the review feedback in recovery context.
-The same bot and self filters as issue replies apply.
-
-## Issue provenance
-
-The `issue_origins` table records each issue's origin, parent issue number, Devin session ID, and creation time.
-The workflow row stores `origin`, `parent_issue_number`, and `discovered_by_session_id`.
-When the Retro Devin records a follow-up issue, the engine links it to the parent workflow and session. Issues with `DEVIN_DISCOVERED` provenance never get a retro of their own, so follow-ups cannot recurse into more follow-ups. An origin is recorded only when the follow-up issue is not already tracked. Issues discovered via polling that carry the `devin-analysis` label are also treated as `DEVIN_DISCOVERED` — they are triaged and fixed like any issue, they just cannot spawn a retro.
-The poller later discovers the issue and applies the stored provenance.
-The dashboard marks human-reported issues and Devin-discovered issues.
-The issue page shows parent and child links.
-
-## Persistence and restart safety
-
-| Table | Stored data |
-|---|---|
-| `deliveries` | GitHub webhook delivery IDs and receive times |
-| `workflows` | Issue state, structured output, timestamps, PR details, and provenance |
-| `sessions` | Devin session IDs, roles, status, output fingerprints, ACUs, and active state |
-| `events` | Workflow state changes and operational events |
-| `issue_origins` | Parent and Devin provenance for issues discovered later |
-
-The store enforces one workflow per repository and issue number.
-Webhook delivery IDs prevent repeated webhook work.
-Devin session creation sends `idempotent=true`.
-Session IDs, active-session checks, and output fingerprints prevent duplicate dispatch and repeated output handling.
-After restart, the engine reads active sessions from SQLite and reconciles them before it dispatches new work.
-
-## Dashboard and API
-
-- The dashboard shows four KPIs: `Open issues`, `Working now`, `Waiting on a human`, and `Fixed & verified`, plus percent of merged PRs merged without changes and total ACUs.
-- `Waiting on a human` counts workflows in `READY_FOR_REVIEW`, `NEEDS_INFO`, `BLOCKED`, `FAILED`, and `ESCALATED` — anything where the next action is a person's.
-- The Issues list shows each workflow with a PR status badge and a Devin-discovered marker. Expanding a row shows a four-step tracker (Triaging, Investigating, Remediating, PR ready for review) with one-line results per step and links into each Devin session.
-- The issue page shows the same tracker plus a fifth, dashed "Related defect analysis" step, the Retro results detail, and the GitHub issue and PR links.
-- `READY_FOR_REVIEW` requires green GitHub checks on the PR head commit; merged PRs mark `COMPLETED`.
-
-The `executive` metrics fields are `issues_open`, `in_progress`, `awaiting_human`, `awaiting_review`, `awaiting_input`, `awaiting_blocked`, `solved`, `merged_without_changes_pct`, `bugs_handled`, `verified_fixes`, `median_time_to_fix`, `needs_human`, `defects_discovered`, and `acus_per_verified_fix`.
-`median_time_to_fix` measures discovery to PR open time, minus time parked in `NEEDS_INFO` or `BLOCKED`. `merged_without_changes_pct` compares the recorded PR head sha at open time to the sha at merge.
-
-| Route | Purpose |
-|---|---|
-| `GET /` | Dashboard page |
-| `GET /issues/{number}` | Issue detail page |
-| `GET /api/metrics` | Counts, groups, funnel, rates, medians, throughput, and ACUs |
-| `GET /api/workflows` | Workflow list with state, timing, provenance, and session summaries |
-| `GET /api/workflows/{repo_owner}/{repo}/{number}` | One workflow with sessions, events, parent, and children |
-| `GET /healthz` | Service status, target repository, and dry-run flag |
-| `POST /admin/poll-now` | Runs one serialized workflow tick |
-| `POST /webhooks/github` | Accepts signed issue, issue comment, PR review, PR review comment, and ping events |
-
-## Security model
-
-- `POST /webhooks/github` requires `GITHUB_WEBHOOK_SECRET` and a valid HMAC signature.
-- The route returns `503` when the secret is unset and `401` when the signature is invalid.
-- `POST /admin/poll-now` requires `Authorization: Bearer $ADMIN_TOKEN`.
-- It returns `503` when `ADMIN_TOKEN` is unset and `401` for an invalid token.
-- Dashboard pages and GET APIs have no built-in authentication.
-- Place them behind a trusted network or an authenticated proxy.
-- The service reads issues and PRs, posts issue comments, and uses Devin to create PRs.
-- It does not install a service or agent in the target repository.
+`app/workflow.py` (engine) · `app/handlers.py` (role output) · `app/gates.py` (decisions) · `app/prompts.py` (prompts + schemas) · `app/devin_client.py` + `app/devin_status.py` (v1/v3 API) · `app/github_client.py` · `app/store.py` · `app/metrics.py` · `app/poller.py` · `app/main.py` (FastAPI) · `app/static/` · `skills/` (role methodology injected into prompts)
