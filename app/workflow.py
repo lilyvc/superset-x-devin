@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 from .config import Settings
 from .devin_status import _last_devin_message, _session_state
@@ -674,7 +674,11 @@ class WorkflowEngine:
             if current:
                 self.store.set_state(workflow["id"], current["state"], last_comment_id=last_id)
 
-    _RESUMABLE_ROLES = {Role.INVESTIGATOR.value, Role.REMEDIATOR.value, Role.DEDUP.value}
+    _RESUMABLE_ROLES: ClassVar[set[str]] = {
+        Role.INVESTIGATOR.value,
+        Role.REMEDIATOR.value,
+        Role.DEDUP.value,
+    }
 
     async def _resume_or_recover(self, workflow: dict, comment: dict, login: str) -> None:
         """A blocked workflow got a human reply but has no live session.
