@@ -192,6 +192,12 @@ async def github_webhook(request: Request):
         return await engine.handle_issue_event(payload)
     if event == "issue_comment" and payload.get("action") == "created":
         return await engine.handle_issue_comment_event(payload)
+    # PR feedback surfaces: all three just trigger a tick; _pr_replies picks
+    # up the new comments from the API with per-surface cursors.
+    if event == "pull_request_review_comment" and payload.get("action") == "created":
+        return await engine.handle_issue_comment_event(payload)
+    if event == "pull_request_review" and payload.get("action") == "submitted":
+        return await engine.handle_issue_comment_event(payload)
     if event == "ping":
         return {"handled": True, "reason": "ping"}
     return {"handled": False, "reason": f"unsupported event {event}"}

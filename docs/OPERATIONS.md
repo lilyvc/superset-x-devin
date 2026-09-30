@@ -47,9 +47,9 @@ When `ENABLE_POLLING=true`, the service uses `POLL_BACKLOG` at startup.
 ## Webhook intake and polling
 
 Use webhook intake when GitHub can reach the service over HTTPS.
-Set `GITHUB_WEBHOOK_SECRET` and configure the GitHub webhook to send issue and issue comment events to `/webhooks/github`.
+Set `GITHUB_WEBHOOK_SECRET` and configure the GitHub webhook to send issue, issue comment, pull request review, and pull request review comment events to `/webhooks/github`.
 The service checks `X-Hub-Signature-256` and deduplicates deliveries by `X-GitHub-Delivery`.
-It accepts opened or reopened issue events, created issue comments, and ping events.
+It accepts opened or reopened issue events, created issue comments, created pull request review comments, submitted pull request reviews, and ping events.
 
 Use polling when the service does not have a public URL.
 Set `ENABLE_POLLING=true` and `GITHUB_POLL_INTERVAL_SECONDS`.

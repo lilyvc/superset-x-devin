@@ -99,6 +99,38 @@ class GitHubClient:
                 break
         return comments
 
+    async def list_pull_review_comments(self, repo: str, pull_number: int) -> list[dict]:
+        """Inline review comments on a pull request (a different id space
+        from issue comments — track a separate cursor)."""
+        comments: list[dict] = []
+        for page in range(1, 101):
+            resp = await self._client.get(
+                f"/repos/{repo}/pulls/{pull_number}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            comments.extend(batch)
+            if len(batch) < 100:
+                break
+        return comments
+
+    async def list_pull_reviews(self, repo: str, pull_number: int) -> list[dict]:
+        """Submitted reviews (their bodies carry 'changes requested' summaries
+        that never appear as issue comments)."""
+        reviews: list[dict] = []
+        for page in range(1, 101):
+            resp = await self._client.get(
+                f"/repos/{repo}/pulls/{pull_number}/reviews",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            reviews.extend(batch)
+            if len(batch) < 100:
+                break
+        return reviews
+
     async def get_authenticated_user(self) -> dict:
         resp = await self._client.get("/user")
         resp.raise_for_status()

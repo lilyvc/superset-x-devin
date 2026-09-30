@@ -108,6 +108,11 @@ class Store:
                 # merge time to detect whether humans pushed extra commits.
                 "pr_head_sha": "TEXT",
                 "merged_without_changes": "INTEGER",
+                # Cursors for comment surfaces on the tracked PR — each lives
+                # in a different id namespace.
+                "last_pr_comment_id": "INTEGER DEFAULT 0",
+                "last_pr_review_comment_id": "INTEGER DEFAULT 0",
+                "last_pr_review_id": "INTEGER DEFAULT 0",
             })
 
     @staticmethod

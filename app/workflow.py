@@ -359,6 +359,93 @@ class WorkflowEngine:
             current = self.store.get_workflow_by_id(workflow["id"])
             if current:
                 self.store.set_state(workflow["id"], current["state"], last_comment_id=last_id)
+        await self._pr_replies()
+
+    _PR_REPLY_STATES: ClassVar[set[str]] = {
+        State.REMEDIATING.value, State.VERIFYING.value, State.PR_OPENED.value,
+        State.CI_CHECKING.value, State.READY_FOR_REVIEW.value,
+    }
+
+    async def _pr_replies(self) -> None:
+        """Forward human feedback on the tracked remediation PR to the
+        Remediator — a live session gets it directly, a settled one is
+        resumed or recovered so it can address the review.
+
+        Three comment surfaces exist on a PR, each in its own id namespace:
+        conversation comments (issue comments on the PR number), inline
+        review comments, and submitted review bodies."""
+        for workflow in self.store.list_workflows():
+            if workflow["state"] not in self._PR_REPLY_STATES or not workflow.get("pr_number"):
+                continue
+            repo, pr = workflow["repo"], workflow["pr_number"]
+            reviews = await self.github.list_pull_reviews(repo, pr)
+            sources = [
+                ("last_pr_comment_id", await self.github.list_issue_comments(repo, pr), None),
+                ("last_pr_review_comment_id", await self.github.list_pull_review_comments(repo, pr), None),
+                ("last_pr_review_id",
+                 [r for r in reviews
+                  if r.get("body") and r.get("state") in {"CHANGES_REQUESTED", "COMMENTED"}],
+                 "review"),
+            ]
+            for field, comments, kind in sources:
+                last_id = workflow.get(field) or 0
+                for comment in sorted(comments, key=lambda c: c.get("id", 0)):
+                    if comment.get("id", 0) <= last_id:
+                        continue
+                    last_id = comment["id"]
+                    user = comment.get("user") or {}
+                    login = user.get("login", "")
+                    if (user.get("type") == "Bot" or login.endswith("[bot]")
+                            or login == self._github_login):
+                        continue
+                    await self._forward_pr_comment(workflow, comment, login, kind)
+                current = self.store.get_workflow_by_id(workflow["id"])
+                if current:
+                    self.store.set_state(workflow["id"], current["state"], **{field: last_id})
+
+    async def _forward_pr_comment(self, workflow: dict, comment: dict,
+                                  login: str, kind: str | None) -> None:
+        path = comment.get("path")
+        location = (f" on {path}:{comment.get('line') or comment.get('original_line')}"
+                    if path else "")
+        where = "reviewed" if kind == "review" else "commented"
+        note = (
+            f"A reviewer {where} on PR #{workflow['pr_number']} "
+            f"for issue #{workflow['issue_number']} (by {login}){location}:\n\n"
+            f"{comment.get('body', '')}\n\n"
+            "Address the feedback on the same PR branch and update the structured output."
+        )
+        session = next((s for s in self.store.get_sessions(workflow["id"], active_only=True)
+                        if s["role"] == Role.REMEDIATOR.value), None)
+        if session is not None:
+            await self.devin.send_message(session["session_id"], note)
+            self.store.add_event(workflow["id"], "pr_comment_forwarded",
+                                 detail={"comment_id": comment.get("id"),
+                                         "session_id": session["session_id"]})
+            return
+        last = next((s for s in reversed(self.store.get_sessions(workflow["id"]))
+                     if s["role"] == Role.REMEDIATOR.value), None)
+        if last is not None:
+            try:
+                await self.devin.send_message(last["session_id"], note)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not resume remediator %s: %s", last["session_id"], exc)
+            else:
+                self.store.update_session(last["session_id"], active=1, finished_at=None)
+                self.store.set_state(workflow["id"], State.REMEDIATING, waiting_since=None)
+                self.store.add_event(workflow["id"], "pr_comment_resumed_session",
+                                     detail={"comment_id": comment.get("id"),
+                                             "session_id": last["session_id"]})
+                return
+        context = (
+            f"A reviewer {where} on the remediation PR {workflow.get('pr_url')} "
+            f"(by {login}){location}: {comment.get('body', '')}\n"
+            "The previous remediator session could not be resumed; address "
+            "this feedback on the same PR."
+        )
+        await self._create_role_session(workflow, Role.REMEDIATOR, extra_context=context)
+        self.store.add_event(workflow["id"], "pr_comment_recovery_session",
+                             detail={"comment_id": comment.get("id")})
 
     _RESUMABLE_ROLES: ClassVar[set[str]] = {
         Role.INVESTIGATOR.value,
