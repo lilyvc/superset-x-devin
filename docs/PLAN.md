@@ -19,7 +19,7 @@
 - Add dashboard authentication or require an identity-aware proxy.
 - Add per-repository settings for deployments that serve more than one repository.
 - Add retry backoff, jitter, and a dead-letter path for repeated API failures and poll timeouts.
-- Define a human-approved policy for Analyst follow-up issues or PRs.
+- Define a human-approved policy for Retro Devin follow-up issues or PRs.
 - Limit clarification rounds before the workflow escalates to a human.
 - **Proposal:** Add optional Devin Org Knowledge notes about issue patterns for later investigations.
 - **Proposal:** Add scheduled Devin code scans for proactive correctness checks.

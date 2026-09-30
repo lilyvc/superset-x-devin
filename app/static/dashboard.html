@@ -77,6 +77,7 @@ const STEPS=[
   ['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],
 ];
 const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
+const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
 function stepNote(w,i){
   const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{};
   if(i===0){
@@ -115,7 +116,7 @@ function stepsHtml(w){
     let cls='',mark='';
     if(off!==undefined){
       if(i<off){cls='done';mark='✓'}
-      else if(i===off){cls='bad';mark='✗'}
+      else if(i===off){if(SKIPLIKE[w.state]){cls='skip';mark='–'}else{cls='bad';mark='✗'}}
     }else{
       const done=i<cur||(cur!==-1&&w.state==='COMPLETED');
       if(done){cls='done';mark='✓'}
@@ -135,7 +136,7 @@ function sessionsHtml(w){
   const real=/(?:devin-)?[0-9a-f]{32}/;
   return `<div class="sesslist small">${sorted.map(s=>{
     const label=roleLabel[s.role]||esc(s.role);
-    return real.test(s.id||'')
+    return real.test(s.url||'')
       ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${label} ↗</a>`
       : `<span class="muted">${label}</span>`;
   }).join('<span class="muted"> · </span>')}</div>`;

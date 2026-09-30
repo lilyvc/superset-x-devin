@@ -98,6 +98,9 @@ pre{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10
 .st-label{white-space:nowrap}
 .st-note{font-weight:400;color:var(--muted);font-size:12px}
 .milestones li.bad .st-note{color:var(--bad)}
+.milestones li.skip{color:var(--warn)}
+.milestones li.skip .mk{border-color:var(--warn);background:var(--warn-soft);color:var(--warn)}
+.milestones li.skip .st-note{color:var(--warn)}
 .milestones li.pre-retro::before{background:none;border-left:1.5px dashed var(--line);width:0}
 .milestones li.retro .mk{border-style:dashed}
 .sesslist{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}

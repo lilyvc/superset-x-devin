@@ -2,9 +2,13 @@
 <html lang="en"><head><meta charset="utf-8"><title>Issue · superset-x-devin</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"></head>
 <body>
-<header><a href="/">← Dashboard</a><h1 id="title">Issue</h1><span class="sub" id="state"></span></header>
+<header><a href="/">← Dashboard</a></header>
 <main>
-  <div class="card" id="provenance" style="display:none;max-width:760px;margin-bottom:14px"></div>
+  <div class="card" id="issuehead" style="max-width:760px;margin-bottom:14px;display:none">
+    <a id="title" href="#" target="_blank" style="font-weight:600;font-size:16px"></a>
+    <div class="small" id="meta" style="margin-top:4px"></div>
+    <div id="children"></div>
+  </div>
   <div class="card" style="max-width:760px">
     <ul class="milestones" id="steps" style="margin:4px 0 0"></ul>
   </div>
@@ -20,11 +24,12 @@ const STEPS=[
   ['PR ready for review',null,['READY_FOR_REVIEW','COMPLETED']],
 ];
 const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
+const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
 const number=location.pathname.split('/').pop();
 const stepSession=(w,role)=>{
   const list=(w.sessions||[]).filter(s=>s.role===role);
   const s=list[list.length-1];
-  return s&&real.test(s.session_id||'')?`<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">↗</a>`:'';
+  return s&&real.test(s.url||'')?`<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">↗</a>`:'';
 };
 const prBadge=w=>{
   if(!w.pr_url)return '';
@@ -87,14 +92,16 @@ function retroDetail(ana){
   return rows.length?`<details class="small" style="margin-top:4px"><summary style="cursor:pointer">Retro results</summary><div style="margin-top:6px">${rows.join('')}</div></details>`:'';
 }
 function stepsHtml(w){
-  const reached=new Set((w.events||[]).map(e=>e.to_state));reached.add(w.state);
   const off=OFFTRACK[w.state];
   const cur=off===undefined?STEPS.findIndex(([,,ss])=>ss.includes(w.state)):-1;
   const lis=STEPS.map(([label,role,ss],i)=>{
     let cls='pre-retro',mark='';
     if(off!==undefined){
       if(i<off){cls+=' done';mark='✓'}
-      else if(i===off){cls+=' bad';mark='✗'}
+      else if(i===off){
+        if(SKIPLIKE[w.state]){cls+=' skip';mark='–'}
+        else{cls+=' bad';mark='✗'}
+      }
     }else{
       const done=i<cur||w.state==='COMPLETED';
       if(done){cls+=' done';mark='✓'}
@@ -105,7 +112,7 @@ function stepsHtml(w){
     const badge=i===3?(' '+prBadge(w)):'';
     return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label}${sess?' '+sess:''}${badge}</span>${note?`<span class="st-note">${note}</span>`:''}</div></li>`;
   });
-  // 5th step: the Retro Devin — dotted, extra to the remediation flow.
+  // 5th step: Retrospecting — dashed, extra to the remediation flow.
   const anaSess=stepSession(w,'analyst');
   const ana=w.analysis||{};
   const retroSess=(w.sessions||[]).filter(s=>s.role==='analyst');
@@ -114,27 +121,25 @@ function stepsHtml(w){
   if(Object.keys(ana).length||(retroSess.length&&!retroActive)){rcls+=' done';rmark='✓'}
   else if(retroActive){rcls+=' now'}
   const rnote=stepNote(w,4);
-  lis.push(`<li class="${rcls}"><span class="mk">${rmark}</span><div class="st-line"><span class="st-label">Retro Devin${anaSess?' '+anaSess:''}</span>${rnote?`<span class="st-note">${rnote}</span>`:''}${retroDetail(ana)}</div></li>`);
+  lis.push(`<li class="${rcls}"><span class="mk">${rmark}</span><div class="st-line"><span class="st-label">Retrospecting${anaSess?' '+anaSess:''}</span>${rnote?`<span class="st-note">${rnote}</span>`:''}${retroDetail(ana)}</div></li>`);
   return lis.join('');
 }
 async function load(){
   const h=await fetch('/healthz').then(r=>r.json());
   const w=await fetch(`/api/workflows/${h.target_repo}/${number}`).then(r=>{if(!r.ok)throw new Error('not found');return r.json()});
-  $('#title').textContent=`Issue #${w.issue_number} ${w.title||''}`;
-  $('#state').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>`;
-  const rows=[];
   const when=w.discovered_at?new Date(w.discovered_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
-  if(w.origin==='DEVIN_DISCOVERED'){
-    rows.push(`<div><span class="origin devin">✦ Devin-discovered</span> — <a href="${esc(w.issue_url)}" target="_blank">issue #${w.issue_number} ${esc(w.title||'')}</a> <span class="muted">· filed by Retro Devin${w.parent?` while investigating <a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number} ${esc(w.parent.title||'')}</a>`:''}${when?` · ${when}`:''}</span></div>`);
-  }else{
-    rows.push(`<div><a href="${esc(w.issue_url)}" target="_blank">issue #${w.issue_number} ${esc(w.title||'')}</a> <span class="muted">· opened by ${esc(w.author||'a reporter')}${when?` · ${when}`:''}</span></div>`);
-  }
-  (w.children||[]).forEach(c=>{
-    rows.push(`<div class="small" style="margin-left:18px">└ <span class="origin devin">✦ related defect discovered</span> <a href="/issues/${c.issue_number}">#${c.issue_number} ${esc(c.title||'')}</a> <span class="pill ${c.state}">${c.state.replace(/_/g,' ')}</span></div>`);
-  });
-  if(rows.length){$('#provenance').style.display='';$('#provenance').innerHTML=rows.join('');}
+  $('#title').textContent=`issue #${w.issue_number} ${w.title||''}`;
+  $('#title').href=w.issue_url||'#';
+  const who=w.origin==='DEVIN_DISCOVERED'
+    ?'filed by Retro Devin'+(w.parent?` while investigating <a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number}</a>`:'')
+    :'opened by '+esc(w.author||'a reporter');
+  $('#meta').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span> <span class="muted">· ${who}${when?` · ${when}`:''}</span>`;
+  $('#children').innerHTML=(w.children||[]).map(c=>
+    `<div class="small" style="margin-top:4px">└ <span class="origin devin">✦ related defect discovered</span> <a href="/issues/${c.issue_number}">#${c.issue_number} ${esc(c.title||'')}</a> <span class="pill ${c.state}">${c.state.replace(/_/g,' ')}</span></div>`
+  ).join('');
+  $('#issuehead').style.display='';
   $('#steps').innerHTML=stepsHtml(w);
 }
-load().catch(()=>{$('#title').textContent='Workflow not found'});setInterval(()=>load().catch(()=>{}),5000);
+load().catch(()=>{$('#issuehead').style.display='';$('#title').textContent='Workflow not found'});setInterval(()=>load().catch(()=>{}),5000);
 </script>
 </body></html>
