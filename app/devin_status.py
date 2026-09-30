@@ -5,7 +5,7 @@ WAITING_STATUSES = {"blocked", "suspend_requested", "suspend_requested_frontend"
 V3_WAITING_DETAILS = {"waiting_for_user", "inactivity"}
 
 
-def _session_state(session: dict) -> tuple[str, str]:
+def session_state(session: dict) -> tuple[str, str]:
     """Return ``(status, kind)`` where kind is final, waiting, or running."""
     enum = session.get("status_enum")
     if enum:
@@ -24,7 +24,7 @@ def _session_state(session: dict) -> tuple[str, str]:
     return status or detail, "running"
 
 
-def _last_devin_message(session: dict) -> str | None:
+def last_devin_message(session: dict) -> str | None:
     """Extract the latest Devin-authored message across v1 and v3 shapes."""
     messages = session.get("messages") or []
     for message in reversed(messages):

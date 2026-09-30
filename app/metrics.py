@@ -3,20 +3,14 @@
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
+from .parsing import parse_dt
 from .states import ACTIVE_STATES, FUNNEL, Origin, State
-
-
-def _dt(value):
-    try:
-        return datetime.fromisoformat(value) if value else None
-    except ValueError:
-        return None
 
 
 def _duration(rows, end):
     values = []
     for row in rows:
-        start, finish = _dt(row.get("discovered_at")), _dt(row.get(end))
+        start, finish = parse_dt(row.get("discovered_at")), parse_dt(row.get(end))
         if start and finish:
             values.append((finish - start).total_seconds())
     return median(values) if values else None
@@ -59,7 +53,7 @@ def metrics(store, settings) -> dict:
     total_acus = sum(float(s.get("acus") or 0) for s in sessions)
     opened_24h = opened_7d = 0
     for row in rows:
-        opened = _dt(row.get("pr_opened_at"))
+        opened = parse_dt(row.get("pr_opened_at"))
         if opened:
             age = now - opened
             opened_24h += age <= timedelta(days=1)

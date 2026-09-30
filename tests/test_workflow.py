@@ -5,9 +5,12 @@ import pytest
 
 from app.config import Settings
 from app.devin_client import DevinClient
+from app.gates import investigation_gate, verification_gate
+from app.handlers import SettledSession, handle_analyst
+from app.parsing import issue_number_from_url
 from app.states import State
 from app.store import Store
-from app.workflow import WorkflowEngine, investigation_gate, verification_gate
+from app.workflow import WorkflowEngine
 
 
 def _investigation():
@@ -285,7 +288,7 @@ def test_triage_needs_info_asks_then_reply_queues_investigation(tmp_path):
     assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
 
 
-def test_intake_filters_skip_without_spending_devin(tmp_path):
+def test_intake_skips_without_spending_devin(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True, ignore_labels=("question",),
                         ignore_issue_types=("feature",))
     issues = [_issue(1, labels=[{"name": "question"}]),
@@ -573,7 +576,13 @@ def test_analyst_followup_records_issue_origin(tmp_path):
     row = {"session_id": "sess-ana", "url": "https://app.devin.ai/x"}
     out = {"systemic_risk": "low", "summary": "s", "recommended_followup": "FILE",
            "followup_issue_url": "https://github.com/owner/repo/issues/77"}
-    asyncio.run(engine._handle_analyst(row, workflow, out, "fp"))
+    asyncio.run(handle_analyst(
+        engine,
+        SettledSession(
+            row=row, workflow=workflow, output=out, kind="final",
+            fingerprint="fp", response={}, pulls=[],
+        ),
+    ))
     origin = store.get_issue_origin("owner/repo", 77)
     assert origin["origin"] == "DEVIN_DISCOVERED"
     assert origin["parent_issue_number"] == 1
@@ -581,7 +590,6 @@ def test_analyst_followup_records_issue_origin(tmp_path):
 
 
 def test_issue_number_from_url():
-    from app.workflow import _issue_number_from_url
-    assert _issue_number_from_url("https://github.com/o/r/issues/42") == 42
-    assert _issue_number_from_url("https://github.com/o/r/pull/7") is None
-    assert _issue_number_from_url(None) is None
+    assert issue_number_from_url("https://github.com/o/r/issues/42") == 42
+    assert issue_number_from_url("https://github.com/o/r/pull/7") is None
+    assert issue_number_from_url(None) is None

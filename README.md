@@ -439,7 +439,10 @@ Reply on the issue; polling forwards the answer to the same session.
 ```text
 app/
   main.py          FastAPI, dashboard/API routes, webhook verification
-  workflow.py      Multi-stage engine, gates, dispatch, replies
+  workflow.py      Engine: tick, discovery, reconciliation, replies, dispatch
+  handlers.py      Per-role handling of settled Devin output
+  gates.py         Python-owned decision gates
+  parsing.py       Pure GitHub and Devin parsers
   states.py        State, role, waiting, terminal, and funnel vocabulary
   prompts.py       Role prompts, schemas, and comment templates
   devin_client.py  Devin v1/v3 client and dry-run sessions
