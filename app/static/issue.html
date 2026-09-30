@@ -1,145 +1,130 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Issue · superset-x-devin</title>
+<html lang="en"><head><meta charset="utf-8"><title>issue · superset-x-devin</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <header><a href="/">← Dashboard</a></header>
-<main>
-  <div class="card" id="issuehead" style="max-width:760px;margin-bottom:14px;display:none">
-    <a id="title" href="#" target="_blank" style="font-weight:600;font-size:16px"></a>
-    <div class="small" id="meta" style="margin-top:4px"></div>
-    <div id="children"></div>
-  </div>
-  <div class="card" style="max-width:760px">
-    <ul class="milestones" id="steps" style="margin:4px 0 0"></ul>
-  </div>
+<main id="wmain">
+  <div class="muted">Loading…</div>
 </main>
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const real=/(?:devin-)?[0-9a-f]{32}/;
-const STEPS=[
-  ['Triaging','triage',['DISCOVERED','TRIAGING']],
-  ['Investigating','investigator',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],
-  ['Remediating','remediator',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],
-  ['PR ready for review',null,['READY_FOR_REVIEW','COMPLETED']],
-];
-const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
-const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
-const number=location.pathname.split('/').pop();
-const stepSession=(w,role)=>{
-  const list=(w.sessions||[]).filter(s=>s.role===role);
-  const s=list[list.length-1];
-  return s&&real.test(s.url||'')?`<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">↗</a>`:'';
-};
-const prBadge=w=>{
-  if(!w.pr_url)return '';
-  const pr=w.pr_url.split('/').pop();
-  let icon,cls,label;
-  if(w.state==='COMPLETED'){icon='●';cls='merged';label='merged'}
-  else if(w.ci_status==='failed'){icon='✕';cls='fail';label='CI failing'}
-  else if(w.ci_status==='passed'||w.state==='READY_FOR_REVIEW'){icon='✓';cls='ready';label='CI green'}
-  else{icon='◌';cls='pending';label='CI '+(w.ci_status||'pending')}
-  return `<a class="prst ${cls}" href="${esc(w.pr_url)}" target="_blank" title="PR #${pr} · ${label}">${icon} PR #${pr}</a>`;
-};
-function stepNote(w,i){
-  const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
-  if(i===0){
-    if(w.state==='SKIPPED')return esc(tri.rationale||w.failure_reason||'skipped by triage');
-    if(tri.verdict==='ACTIONABLE')return esc(tri.rationale||'actionable engineering defect');
-    if(tri.verdict==='NEEDS_INFO')return 'asked reporter: '+esc(tri.clarification_question||'more information needed');
-    if(tri.verdict)return esc(tri.verdict.toLowerCase());
-    return '';
-  }
-  if(i===1){
-    if(w.state==='NOT_REPRODUCIBLE')return 'could not reproduce — needs a better report or more detail';
-    if(w.state==='NEEDS_INFO')return 'needs input: '+esc((inv.clarification_question||tri.clarification_question||w.failure_reason||''));
-    if(inv.root_cause)return esc(inv.root_cause);
-    if(inv.summary)return esc(inv.summary);
-    return '';
-  }
-  if(i===2){
-    const fix=rem.fix_summary||rem.summary;
-    if(w.state==='CI_CHECKING'||w.state==='PR_OPENED')
-      return (fix?esc(fix)+' · ':'')+'waiting on CI'+(w.ci_status?': '+esc(w.ci_status):'');
-    if(fix)return esc(fix);
-    return '';
-  }
-  if(i===3){
-    if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
-    return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
-  }
-  if(i===4){
-    const kids=(w.children||[]);
-    const parts=[];
-    if(ana.systemic_risk&&ana.systemic_risk!=='none')parts.push(esc(ana.systemic_risk)+' systemic risk');
-    if(ana.summary)parts.push(esc(ana.summary));
-    if(kids.length)parts.push(`${kids.length} related defect${kids.length>1?'s':''} found`);
-    if(ana.followup_issue_url)parts.push(`<a href="${esc(ana.followup_issue_url)}" target="_blank">follow-up issue →</a>`);
-    return parts.join(' · ');
-  }
-  return '';
+const REAL=/(?:devin-)?[0-9a-f]{32}/;
+const ROLE={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Retro',dedup:'Dedup check'};
+const OWNER={
+  DISCOVERED:'Queue',TRIAGING:'Triage Devin',QUEUED:'Queue',
+  INVESTIGATING:'Investigator Devin',REPRODUCED:'Investigator Devin',ROOT_CAUSE_FOUND:'Investigator Devin',
+  NEEDS_INFO:'Reporter',BLOCKED:'Human',
+  REMEDIATING:'Remediator Devin',VERIFYING:'Remediator Devin',PR_OPENED:'Remediator Devin',
+  CI_CHECKING:'GitHub CI',READY_FOR_REVIEW:'Reviewer',
+  COMPLETED:'—',SKIPPED:'—',NOT_REPRODUCIBLE:'—',FAILED:'Human',ESCALATED:'Human'};
+const STAGE={
+  READY_FOR_REVIEW:'Ready for review',COMPLETED:'Merged',CI_CHECKING:'CI checking',PR_OPENED:'PR open',
+  REMEDIATING:'Remediating',VERIFYING:'Verifying',INVESTIGATING:'Investigating',REPRODUCED:'Reproduced',
+  ROOT_CAUSE_FOUND:'Root cause found',NEEDS_INFO:'Needs input',BLOCKED:'Blocked',SKIPPED:'Skipped',
+  NOT_REPRODUCIBLE:'Not reproducible',FAILED:'Failed',ESCALATED:'Escalated',TRIAGING:'Triaging',
+  QUEUED:'Queued',DISCOVERED:'New'};
+function ago(iso){if(!iso)return '–';const s=(Date.now()-new Date(iso))/1000;
+  if(s<60)return Math.floor(s)+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';
+  if(s<86400)return (s/3600).toFixed(1)+'h ago';return new Date(iso).toLocaleDateString()}
+function sessLink(s,label){
+  if(!s)return '';
+  const txt=label||`${ROLE[s.role]||s.role} session ↗`;
+  return REAL.test(s.url||'')
+    ? `<a href="${esc(s.url)}" target="_blank">${txt}</a>`
+    : `<span class="muted">${txt.replace(' ↗','')}</span>`;
 }
-function retroDetail(ana){
-  if(!ana||!Object.keys(ana).length)return '';
-  const rows=[];
-  const add=(k,v)=>{if(v!=null&&v!==''&&!(Array.isArray(v)&&!v.length))rows.push(`<div style="margin:3px 0"><b class="muted">${k}</b> ${v}</div>`)};
-  add('Summary',esc(ana.summary));
-  add('Systemic risk',esc(ana.systemic_risk));
-  add('Same pattern found in',(ana.similar_code_locations||[]).map(esc).join('<br>'));
-  add('Related issues',(ana.related_issues||[]).map(esc).join(', '));
-  add('Recommended follow-up',esc(ana.recommended_followup));
-  if(ana.followup_issue_url)add('Follow-up issue',`<a href="${esc(ana.followup_issue_url)}" target="_blank">${esc(ana.followup_issue_url)}</a>`);
-  return rows.length?`<details class="small" style="margin-top:4px"><summary style="cursor:pointer">Retro results</summary><div style="margin-top:6px">${rows.join('')}</div></details>`:'';
-}
-function stepsHtml(w){
-  const off=OFFTRACK[w.state];
-  const cur=off===undefined?STEPS.findIndex(([,,ss])=>ss.includes(w.state)):-1;
-  const lis=STEPS.map(([label,role,ss],i)=>{
-    let cls='pre-retro',mark='';
-    if(off!==undefined){
-      if(i<off){cls+=' done';mark='✓'}
-      else if(i===off){
-        if(SKIPLIKE[w.state]){cls+=' skip';mark='–'}
-        else{cls+=' bad';mark='✗'}
-      }
-    }else{
-      const done=i<cur||w.state==='COMPLETED';
-      if(done){cls+=' done';mark='✓'}
-      else if(i===cur){cls+=' now'}
-    }
-    const note=stepNote(w,i);
-    const sess=role?stepSession(w,role):'';
-    const badge=i===3?(' '+prBadge(w)):'';
-    return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label}${sess?' '+sess:''}${badge}</span>${note?`<span class="st-note">${note}</span>`:''}</div></li>`;
-  });
-  // 5th step: Retrospecting — dashed, extra to the remediation flow.
-  const anaSess=stepSession(w,'analyst');
-  const ana=w.analysis||{};
-  const retroSess=(w.sessions||[]).filter(s=>s.role==='analyst');
-  const retroActive=retroSess.some(s=>s.active);
-  let rcls='retro',rmark='';
-  if(Object.keys(ana).length||(retroSess.length&&!retroActive)){rcls+=' done';rmark='✓'}
-  else if(retroActive){rcls+=' now'}
-  const rnote=stepNote(w,4);
-  lis.push(`<li class="${rcls}"><span class="mk">${rmark}</span><div class="st-line"><span class="st-label">Retrospecting${anaSess?' '+anaSess:''}</span>${rnote?`<span class="st-note">${rnote}</span>`:''}${retroDetail(ana)}</div></li>`);
-  return lis.join('');
-}
+
 async function load(){
-  const h=await fetch('/healthz').then(r=>r.json());
-  const w=await fetch(`/api/workflows/${h.target_repo}/${number}`).then(r=>{if(!r.ok)throw new Error('not found');return r.json()});
-  const when=w.discovered_at?new Date(w.discovered_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
-  $('#title').textContent=`issue #${w.issue_number} ${w.title||''}`;
-  $('#title').href=w.issue_url||'#';
-  const who=w.origin==='DEVIN_DISCOVERED'
-    ?'filed by Retro Devin'+(w.parent?` while investigating <a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number}</a>`:'')
-    :'opened by '+esc(w.author||'a reporter');
-  $('#meta').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span> <span class="muted">· ${who}${when?` · ${when}`:''}</span>`;
-  $('#children').innerHTML=(w.children||[]).map(c=>
-    `<div class="small" style="margin-top:4px">└ <span class="origin devin">✦ related defect discovered</span> <a href="/issues/${c.issue_number}">#${c.issue_number} ${esc(c.title||'')}</a> <span class="pill ${c.state}">${c.state.replace(/_/g,' ')}</span></div>`
-  ).join('');
-  $('#issuehead').style.display='';
-  $('#steps').innerHTML=stepsHtml(w);
+  const n=location.pathname.split('/').pop();
+  const w=await fetch(`/api/workflows/${window.repo}/${n}`).then(r=>r.json());
+  const ss=w.sessions||[];
+  const byRole=r=>ss.filter(s=>s.role===r).pop();
+  const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
+  const devin=w.origin==='DEVIN_DISCOVERED';
+
+  // ---------- header ----------
+  const origin=devin&&w.parent?`Devin-discovered · from <a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number}</a>`
+    :devin?'Devin-discovered':`Reported by ${esc(w.author||'human')}`;
+  document.title=`#${n} · superset-x-devin`;
+  $('#wmain').innerHTML=`
+    <div class="card head">
+      <a class="title" href="${esc(w.issue_url)}" target="_blank">issue #${n} — ${esc(w.title||'')}</a>
+      <div class="meta">${origin} · <span class="pill ${w.state}">${STAGE[w.state]||w.state}</span> · owner: ${esc(OWNER[w.state]||'—')} · discovered ${ago(w.discovered_at)}</div>
+    </div>
+    ${devin?`<div class="card prov"><h2>Discovered during analysis${w.parent?` of <a href="/issues/${w.parent.issue_number}">#${w.parent.issue_number}</a>`:''}</h2>
+      <div>${esc(ana.summary||tri.rationale||'Similar defect pattern found during related-defect analysis')}</div>
+      <div style="margin-top:8px">${sessLink(byRole('analyst'),'Open analyst session →')||''}</div>
+    </div>`:''}
+    <div class="card"><h2>Progress</h2><ul class="milestones" id="steps"></ul></div>
+    <div class="card" id="evidence"></div>`;
+
+  // ---------- tracker ----------
+  const STEPS=[['Triaging',['DISCOVERED','TRIAGING']],['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],['Find related defects',[]]];
+  const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
+  const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
+  const off=OFFTRACK[w.state];
+  const cur=off===undefined?STEPS.findIndex(([,s])=>s.includes(w.state)):-1;
+  const anaDone=Object.keys(ana).length||ss.some(s=>s.role==='analyst');
+  $('#steps').innerHTML=STEPS.map(([label,st],i)=>{
+    let cls='',mark='';
+    if(i===4){cls='retro pre-retro';if(anaDone){cls+=' done';mark='✓'}}
+    else if(off!==undefined){
+      if(i<off){cls='done';mark='✓'}
+      else if(i===off){cls=SKIPLIKE[w.state]?'skip':'bad';mark=SKIPLIKE[w.state]?'–':'✗'}
+    }else{
+      if(i<cur||w.state==='COMPLETED'){cls='done';mark='✓'}
+      else if(i===cur){cls='now'}
+    }
+    const role=['triage','investigator','remediator',null,'analyst'][i];
+    const link=role?sessLink(byRole(role),'↗'):'';
+    const pr=i===3&&w.pr_url?` <a class="prst ${w.state==='COMPLETED'?'merged':w.ci_status==='passed'||w.state==='READY_FOR_REVIEW'?'ready':w.ci_status==='failed'?'fail':'pending'}" href="${esc(w.pr_url)}" target="_blank">#${w.pr_number||''}</a>`:'';
+    return `<li class="${cls}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label} ${link}${pr}</span></div></li>`;
+  }).join('');
+
+  // ---------- evidence panel: one compact box, stage-appropriate ----------
+  const E=[];
+  const working=['DISCOVERED','TRIAGING','QUEUED','INVESTIGATING','REMEDIATING','VERIFYING'].includes(w.state);
+  if(working){
+    const doing={DISCOVERED:'Waiting for triage to start',TRIAGING:'Deciding whether this is an actionable defect',
+      QUEUED:'Queued for investigation',INVESTIGATING:'Reproducing the reported behavior in the repo',
+      REMEDIATING:'Writing the fix and regression tests',VERIFYING:'Re-running the original reproduction'}[w.state];
+    E.push(`<h2>Current work</h2><div class="kv-v"><b>${esc(OWNER[w.state]||'')}</b> — ${doing}</div>
+      <div style="margin-top:8px">${sessLink(ss.find(s=>s.active)||byRole('investigator')||byRole('triage')||byRole('remediator'),'Open Devin session →')}</div>`);
+  }
+  if(Object.keys(inv).length||w.state==='NEEDS_INFO'||w.state==='NOT_REPRODUCIBLE'){
+    E.push(`<h2>Investigation</h2>
+      ${inv.reproduced!=null?`<div>Reproduced ${inv.reproduced?'✓':'✗'}</div>`:''}
+      ${inv.root_cause?`<div>Root cause: ${esc(inv.root_cause)}</div>`:''}
+      ${inv.expected_behavior?`<div class="muted small">Expected: ${esc(inv.expected_behavior)}</div>`:''}
+      ${inv.observed_behavior?`<div class="muted small">Observed: ${esc(inv.observed_behavior)}</div>`:''}
+      ${(inv.reproduction_evidence||[]).length?`<ul class="ev">${inv.reproduction_evidence.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>`:''}
+      ${sessLink(byRole('investigator'),'Open investigation →')}`);
+  }
+  if(Object.keys(rem).length){
+    E.push(`<h2>Fix</h2>
+      ${w.pr_url?`<div><a href="${esc(w.pr_url)}" target="_blank">PR #${w.pr_number||''} ↗</a></div>`:''}
+      ${rem.fix_summary||rem.summary?`<div>${esc(rem.fix_summary||rem.summary)}</div>`:''}
+      ${(rem.regression_tests_added||[]).length?`<div>Regression tests added ✓</div>`:''}
+      ${rem.reproduction_rerun_passed?`<div>Original reproduction passes ✓</div>`:''}
+      ${w.ci_status?`<div>CI: ${esc(w.ci_status)}</div>`:''}
+      ${sessLink(byRole('remediator'),'Open remediation →')}`);
+  }
+  if(Object.keys(ana).length){
+    E.push(`<h2>Related defects</h2>
+      ${ana.summary?`<div>${esc(ana.summary)}</div>`:''}
+      ${ana.systemic_risk?`<div class="muted small">Systemic risk: ${esc(ana.systemic_risk)}</div>`:''}
+      ${(ana.similar_code_locations||[]).length?`<ul class="ev">${ana.similar_code_locations.map(i=>`<li><code>${esc(i)}</code></li>`).join('')}</ul>`:''}
+      ${ana.followup_issue_url?`<div><a href="${esc(ana.followup_issue_url)}" target="_blank">follow-up issue ↗</a></div>`:''}
+      ${sessLink(byRole('analyst'),'Open analyst session →')}`);
+  }
+  const ev=$('#evidence');
+  if(E.length){ev.innerHTML=E.join('')}else{ev.remove()}
 }
-load().catch(()=>{$('#issuehead').style.display='';$('#title').textContent='Workflow not found'});setInterval(()=>load().catch(()=>{}),5000);
+async function main(){
+  const h=await fetch('/healthz').then(r=>r.json());window.repo=h.target_repo;
+  await load();
+}
+main().catch(e=>{$('#wmain').innerHTML='<div class="muted">'+esc(e)+'</div>'});
 </script>
 </body></html>

@@ -30,6 +30,21 @@ main{padding:28px;max-width:1180px;margin:0 auto}
 .card h2{margin:0 0 12px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .kpi .v{font-family:var(--serif);font-size:42px;font-weight:400;line-height:1.05}
 .kpi .d{color:var(--muted);font-size:13px;margin-top:6px}
+.stat{padding:14px 18px}.stat .v{font-size:30px;font-weight:600;line-height:1.15;font-family:var(--sans)}
+.stat .d{color:var(--muted);font-size:12.5px;margin-top:4px}
+.stat2{padding:10px 18px;display:flex;align-items:baseline;gap:12px}
+.stat2 h2{margin:0}.stat2 .v{font-size:18px;font-weight:600}
+.rowlink{cursor:pointer}
+.attn{font-weight:600;color:var(--warn)}
+.kv-row{display:grid;grid-template-columns:150px 1fr;gap:14px;padding:6px 0;border-bottom:1px dashed var(--line-soft);font-size:14px}
+.kv-row:last-child{border-bottom:0}
+.kv-k{color:var(--muted);font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;padding-top:1px}
+.card.head{padding:16px 20px}
+.card.head .title{font-weight:600;font-size:16.5px}
+.card.head .meta{margin-top:6px;color:var(--muted);font-size:13px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+#evidence h2{margin-top:22px}#evidence h2:first-child{margin-top:0}
+#evidence .ev{margin:6px 0}
+.small-mile .st-note{display:none}
 section{margin-top:16px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
 th{color:var(--faint);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.07em}
