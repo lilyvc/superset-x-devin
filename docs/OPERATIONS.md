@@ -112,7 +112,8 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `ELIGIBILITY_LABEL` | empty | Optional label required for issue intake |
 | `MAX_NEW_ISSUES_PER_POLL` | `5` | Maximum newly discovered issues admitted per poll |
 | `ISSUE_LOOKBACK_DAYS` | unset | Optional age limit for issue intake |
-| `IGNORE_LABELS` | `question,duplicate,invalid,wontfix,discussion,rfc,sip,devin-analysis` | Labels that block intake |
+| `IGNORE_LABELS` | `question,duplicate,invalid,wontfix,discussion,rfc,sip` | Labels that block intake |
+| `ANALYSIS_LABEL` | `devin-analysis` | Label on Retro-filed issues; they are fixed but never get a retro of their own |
 | `IGNORE_ISSUE_TYPES` | `feature,task,epic` | Issue types that block intake |
 | `TRIAGE_ENABLED` | `true` | Starts a Triage session for admitted issues |
 | `TRIAGE_ACU_LIMIT` | `2` | ACU cap for a Triage session |

@@ -298,6 +298,18 @@ def test_triage_needs_info_asks_then_reply_queues_investigation(tmp_path):
     assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
 
 
+def test_analysis_labeled_issue_is_devin_discovered_not_ignored(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True)
+    github = FakeGitHub([_issue(labels=[{"name": "devin-analysis"}])])
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    # triaged and fixed like any issue — not filtered out
+    assert workflow["state"] == State.TRIAGING.value
+    assert workflow["origin"] == "DEVIN_DISCOVERED"
+
+
 def test_intake_skips_without_spending_devin(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True, ignore_labels=("question",),
                         ignore_issue_types=("feature",))
