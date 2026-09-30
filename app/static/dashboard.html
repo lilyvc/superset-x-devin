@@ -48,6 +48,7 @@ const OUTCOME={
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}
 const hm=iso=>iso?new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'–';
 let repo='';
+const OPEN=new Set();
 
 function originTag(w){
   if(w.origin==='DEVIN_DISCOVERED')
@@ -138,7 +139,7 @@ function sessionsHtml(w){
 function rowHtml(w){
   const n=w.issue_number;
   const waiting=w.waiting_for_seconds!=null?` · ${dur(w.waiting_for_seconds)}`:'';
-  return `<div class="wl-item">
+  return `<div class="wl-item${OPEN.has(n)?' open':''}" data-n="${n}">
     <div class="wl-head">
       <span class="caret">▸</span>
       <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>#${n}</b></a> ${esc(w.title||'')} ${originTag(w)} ${prBadge(w)}</span>
@@ -184,7 +185,9 @@ $('#poll').onclick=async()=>{const b=$('#poll');b.disabled=true;b.textContent='P
 $('#worklist').addEventListener('click',e=>{
   const head=e.target.closest('.wl-head');
   if(!head||e.target.closest('a'))return;
-  head.parentElement.classList.toggle('open');
+  const item=head.parentElement,n=+item.dataset.n;
+  item.classList.toggle('open');
+  item.classList.contains('open')?OPEN.add(n):OPEN.delete(n);
 });
 load().catch(console.error);setInterval(()=>load().catch(console.error),5000);
 </script>
