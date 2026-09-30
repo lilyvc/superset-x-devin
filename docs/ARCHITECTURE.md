@@ -80,7 +80,7 @@ The dispatcher uses this order:
 | Order | Role | Condition |
 |---:|---|---|
 | 1 | Remediator | Investigation reached `ROOT_CAUSE_FOUND`; the duplicate gate is clear |
-| 2 | Analyst | `ANALYSIS_ENABLED=true`; state is `ROOT_CAUSE_FOUND`, `REMEDIATING`, `VERIFYING`, `PR_OPENED`, `CI_CHECKING`, or `READY_FOR_REVIEW` |
+| 2 | Analyst | `ANALYSIS_ENABLED=true`; state is `PR_OPENED`, `CI_CHECKING`, `READY_FOR_REVIEW`, or `COMPLETED` — defect-family analysis only runs once a fix PR exists, so failed remediations cost no analyst ACUs |
 | 3 | Investigator | Workflow state is `QUEUED` |
 | 4 | Triage | Workflow state is `DISCOVERED` and `TRIAGE_ENABLED=true` |
 

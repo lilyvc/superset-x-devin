@@ -139,9 +139,11 @@ def test_dry_run_state_machine_restart_safe(tmp_path):
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.REMEDIATING.value
     sessions = store.get_sessions(1)
-    assert {s["role"] for s in sessions} == {"investigator", "remediator", "analyst"}
+    assert {s["role"] for s in sessions} == {"investigator", "remediator"}
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.READY_FOR_REVIEW.value
+    # The analyst only runs once a fix PR exists.
+    assert "analyst" in {s["role"] for s in store.get_sessions(1)}
     count = len(store.get_sessions(1))
     restarted = WorkflowEngine(settings, store, github, DevinClient(""))
     asyncio.run(restarted.tick())
@@ -373,13 +375,14 @@ def test_ready_for_review_requires_green_ci(tmp_path):
     workflow = store.get_workflow("owner/repo", 1)
     assert workflow["state"] == State.CI_CHECKING.value
     assert workflow["ci_status"] == "failed"
-    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
-    assert any("CI checks are failing" in c for c in comments)
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"
+                and "CI checks are failing" in e["detail"]]
+    assert len(comments) == 1
     # A second poll must not re-post the failure comment.
-    count = len(comments)
     asyncio.run(engine.tick())
-    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
-    assert len(comments) == count
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"
+                and "CI checks are failing" in e["detail"]]
+    assert len(comments) == 1
     # Green CI then promotes the PR.
     github.checks = {"check_runs": [
         {"name": "unit tests", "status": "completed", "conclusion": "success"},

@@ -614,10 +614,12 @@ class WorkflowEngine:
             for workflow in workflows:
                 if capacity <= 0:
                     break
+                # Defect-family analysis only runs once a fix PR exists —
+                # investigations/remediations that never produce one aren't
+                # worth the ACUs.
                 if workflow["state"] in {s.value for s in
-                                         {State.ROOT_CAUSE_FOUND, State.REMEDIATING, State.VERIFYING,
-                                          State.PR_OPENED, State.CI_CHECKING,
-                                          State.READY_FOR_REVIEW}} and not self.store.get_sessions(
+                                         {State.PR_OPENED, State.CI_CHECKING,
+                                          State.READY_FOR_REVIEW, State.COMPLETED}} and not self.store.get_sessions(
                                               workflow["id"], Role.ANALYST
                                           ):
                     await self._create_role_session(workflow, Role.ANALYST)

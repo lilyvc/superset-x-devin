@@ -7,6 +7,7 @@
   <div class="card" id="provenance" style="display:none;margin-bottom:14px"></div>
   <div class="card" style="max-width:760px">
     <ul class="milestones" id="steps" style="margin:4px 0 14px"></ul>
+    <div class="small muted" id="analysis" style="margin:0 0 10px"></div>
     <div class="sesslist small" id="sessions"></div>
     <div class="small" id="links" style="margin-top:12px"></div>
   </div>
@@ -90,9 +91,30 @@ async function load(){
       ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">${roleLabel[s.role]||esc(s.role)} ↗</a>`
       : `<span class="muted">${roleLabel[s.role]||esc(s.role)}</span>`
   ).join('<span class="muted"> · </span>')||'<span class="muted">no sessions yet</span>';
+  const ana=w.analysis||{};
+  const kids=(w.children||[]);
+  let anaLine='';
+  if(Object.keys(ana).length||kids.length){
+    const parts=[];
+    if(ana.systemic_risk&&ana.systemic_risk!=='none')parts.push(`${esc(ana.systemic_risk)} systemic risk`);
+    if(ana.summary)parts.push(esc(ana.summary));
+    if(kids.length)parts.push(`${kids.length} related defect${kids.length>1?'s':''} found`);
+    if(ana.followup_issue_url)parts.push(`<a href="${esc(ana.followup_issue_url)}" target="_blank">follow-up issue →</a>`);
+    anaLine=`Defect family: ${parts.join(' · ')||'checked — no related defects'}`;
+  }
+  $('#analysis').textContent='';
+  $('#analysis').innerHTML=anaLine;
   const links=[];
   if(w.issue_url)links.push(`<a href="${esc(w.issue_url)}" target="_blank">GitHub issue →</a>`);
-  if(w.pr_url)links.push(`<a href="${esc(w.pr_url)}" target="_blank">Pull request →</a>${w.ci_status?` <span class="muted">CI: ${esc(w.ci_status)}</span>`:''}`);
+  if(w.pr_url){
+    const pr=w.pr_url.split('/').pop();
+    let icon,cls,label;
+    if(w.state==='COMPLETED'){icon='●';cls='merged';label='merged'}
+    else if(w.ci_status==='failed'){icon='✕';cls='fail';label='CI failing'}
+    else if(w.ci_status==='passed'||w.state==='READY_FOR_REVIEW'){icon='✓';cls='ready';label='CI green'}
+    else{icon='◌';cls='pending';label='CI '+(w.ci_status||'pending')}
+    links.push(`<a class="prst ${cls}" href="${esc(w.pr_url)}" target="_blank" title="PR #${pr} · ${label}">${icon} PR #${pr}</a>`);
+  }
   $('#links').innerHTML=links.join(' &nbsp;·&nbsp; ');
 }
 load().catch(()=>{$('#title').textContent='Workflow not found'});setInterval(()=>load().catch(()=>{}),5000);
