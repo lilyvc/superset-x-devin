@@ -1,7 +1,5 @@
 # superset-x-devin: GitHub issue-to-fix service
 
-_This document uses ASD-STE100 Simplified Technical English._
-
 This external service processes GitHub issues in `TARGET_REPO`. Devin investigates issues and prepares pull requests (PRs) with code changes.
 The service stores its state outside the target repository. It does not install an application or agent there.
 

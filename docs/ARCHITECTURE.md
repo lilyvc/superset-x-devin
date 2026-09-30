@@ -1,7 +1,5 @@
 # Architecture
 
-_This document uses ASD-STE100 Simplified Technical English._
-
 ## Control plane and engineering plane
 
 The Python service controls each workflow. It finds issues, stores state, checks evidence, and starts Devin sessions.

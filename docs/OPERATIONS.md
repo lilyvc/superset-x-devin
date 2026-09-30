@@ -1,7 +1,5 @@
 # Operations
 
-_This document uses ASD-STE100 Simplified Technical English._
-
 ## Requirements
 
 Use a persistent host that can run Docker Compose or Python 3.

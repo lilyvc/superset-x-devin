@@ -1,7 +1,5 @@
 # Plan
 
-_This document uses ASD-STE100 Simplified Technical English._
-
 ## Status
 
 - The service discovers and filters GitHub issues, then routes them through Triage and investigation.
