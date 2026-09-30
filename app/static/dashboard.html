@@ -127,11 +127,11 @@ function stepsHtml(w){
   const lis=MILESTONES.map(([label,ss],i)=>{
     const done=cur===-1?ss.some(s=>reached.has(s)):i<cur;
     const cls=i===cur?'now':done?'done':'';
-    return `<li class="${cls}"><span class="mk">${i===cur?'●':done?'✓':'○'}</span>${label}</li>`;
+    return `<li class="${cls}"><span class="mk">${done?'✓':''}</span>${label}</li>`;
   });
   if(cur===-1){
     const bad=!!BADSTATES[w.state];
-    lis.push(`<li class="${w.state==='COMPLETED'?'done':bad?'bad':'now'}"><span class="mk">${w.state==='COMPLETED'?'✓':bad?'✗':w.state==='NEEDS_INFO'?'?':'●'}</span>${w.state.replace(/_/g,' ').toLowerCase()}${w.failure_reason?': '+esc(w.failure_reason):''}</li>`);
+    lis.push(`<li class="${w.state==='COMPLETED'?'done':bad?'bad':'now'}"><span class="mk">${w.state==='COMPLETED'?'✓':bad?'✗':w.state==='NEEDS_INFO'?'?':''}</span>${w.state.replace(/_/g,' ').toLowerCase()}${w.failure_reason?': '+esc(w.failure_reason):''}</li>`);
   }
   return lis.join('');
 }
