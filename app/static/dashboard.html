@@ -103,13 +103,22 @@ function stepNote(w,i){
   }
   return '';
 }
+const REAL=/(?:devin-)?[0-9a-f]{32}/;
+function sessLink(ss,role){
+  const s=ss.find(s=>s.role===role);
+  if(!s)return '';
+  return REAL.test(s.url||'')
+    ? `<a class="sess" href="${esc(s.url)}" target="_blank" onclick="event.stopPropagation()">Devin session ↗</a>`
+    : `<span class="muted">Devin session</span>`;
+}
 function stepsHtml(w){
   const reached=new Set(w.reached||[]);reached.add(w.state);
   const off=OFFTRACK[w.state];
   let cur=-1;
   if(off===undefined)cur=STEPS.findIndex(([,ss])=>ss.includes(w.state));
   const anaDone=Object.keys(w.analysis||{}).length;
-  const lis=STEPS.map(([label,ss],i)=>{
+  const ss=w.sessions||[];
+  const lis=STEPS.map(([label,sts],i)=>{
     let cls='',mark='';
     if(i===4){
       cls='retro';if(anaDone){cls+=' done';mark='✓'}
@@ -121,24 +130,13 @@ function stepsHtml(w){
       if(done){cls='done';mark='✓'}
       else if(i===cur){cls='now'}
     }
+    const role=['triage','investigator','remediator',null,'analyst'][i];
+    const link=role?sessLink(ss,role):'';
+    const pr=i===3&&w.pr_url?` <a class="prst ${w.state==='COMPLETED'?'merged':w.ci_status==='passed'||w.state==='READY_FOR_REVIEW'?'ready':w.ci_status==='failed'?'fail':'pending'}" href="${esc(w.pr_url)}" target="_blank" onclick="event.stopPropagation()">#${w.pr_url.split('/').pop()}</a>`:'';
     const note=stepNote(w,i);
-    return `<li class="${cls}${i===4?' pre-retro':''}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label}</span>${note?`<span class="st-note">${note}</span>`:''}</div></li>`;
+    return `<li class="${cls}${i===4?' pre-retro':''}"><span class="mk">${mark}</span><div class="st-line"><span class="st-label">${label} ${link}${pr}</span>${note?`<span class="st-note">${note}</span>`:''}</div></li>`;
   }).join('');
   return `<ul class="milestones">${lis}</ul>`;
-}
-function sessionsHtml(w){
-  const ss=(w.sessions||[]);
-  if(!ss.length)return '';
-  const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Retro',dedup:'Dedup check'};
-  const roleOrder={triage:0,investigator:1,dedup:2,remediator:3,analyst:4};
-  const sorted=[...ss].sort((a,b)=>(roleOrder[a.role]??9)-(roleOrder[b.role]??9));
-  const real=/(?:devin-)?[0-9a-f]{32}/;
-  return `<div class="sesslist small">${sorted.map(s=>{
-    const label=roleLabel[s.role]||esc(s.role);
-    return real.test(s.url||'')
-      ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${label} ↗</a>`
-      : `<span class="muted">${label}</span>`;
-  }).join('<span class="muted"> · </span>')}</div>`;
 }
 function rowHtml(w){
   const n=w.issue_number;
@@ -151,11 +149,6 @@ function rowHtml(w){
     </div>
     <div class="wl-body">
       ${stepsHtml(w)}
-      ${sessionsHtml(w)}
-      <div class="wl-meta small muted">
-        ${w.discovered_at?`discovered ${new Date(w.discovered_at).toLocaleDateString()}`:''}${w.failure_reason&&w.state!=='SKIPPED'?` · ${esc(w.failure_reason)}`:''}
-      </div>
-      <div class="small" style="margin-top:6px"><a href="/issues/${n}">Full detail →</a></div>
     </div>
   </div>`;
 }
