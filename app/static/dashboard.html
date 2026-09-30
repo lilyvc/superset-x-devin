@@ -17,11 +17,12 @@
   </div>
 
   <div class="grid g4">
-    <div class="card kpi"><h2>Issues open</h2><div class="v" id="k-open">–</div><div class="d" id="k-open-sub">–</div></div>
-    <div class="card kpi"><h2>In progress</h2><div class="v" id="k-progress">–</div><div class="d" id="k-progress-sub">–</div></div>
-    <div class="card kpi"><h2>Awaiting human</h2><div class="v" id="k-human">–</div><div class="d" id="k-human-sub">–</div></div>
-    <div class="card kpi"><h2>Solved</h2><div class="v" id="k-solved">–</div><div class="d" id="k-solved-sub">–</div></div>
+    <div class="card kpi"><h2>Open issues</h2><div class="v" id="k-open">–</div><div class="d" id="k-open-sub">–</div></div>
+    <div class="card kpi"><h2>Working now</h2><div class="v" id="k-progress">–</div><div class="d" id="k-progress-sub">–</div></div>
+    <div class="card kpi"><h2>Waiting on a human</h2><div class="v" id="k-human">–</div><div class="d" id="k-human-sub">–</div></div>
+    <div class="card kpi"><h2>Fixed &amp; verified</h2><div class="v" id="k-solved">–</div><div class="d" id="k-solved-sub">–</div></div>
   </div>
+  <p class="small muted" style="margin:-4px 0 12px">ACU = Agent Compute Unit — Devin's compute cost for running a session.</p>
 
   <section class="card">
     <h2>Issues</h2>
@@ -163,7 +164,7 @@ async function load(){
   $('#k-open').textContent=e.issues_open??'–';
   $('#k-open-sub').textContent=`${(g.skipped||0)+(g.not_reproducible||0)} closed out without a fix`;
   $('#k-progress').textContent=e.in_progress??'–';
-  $('#k-progress-sub').textContent=`${m.active_sessions} active Devin sessions · ${(+m.total_acus).toFixed(1)} ACUs`;
+  $('#k-progress-sub').textContent=`${m.active_sessions} Devin sessions running · ${(+m.total_acus).toFixed(1)} ACU total`;
   $('#k-human').textContent=e.awaiting_human??'–';
   $('#k-human-sub').textContent=`${e.awaiting_review||0} for review · ${e.awaiting_input||0} need input · ${e.awaiting_blocked||0} blocked`;
   $('#k-solved').textContent=e.solved??'–';
