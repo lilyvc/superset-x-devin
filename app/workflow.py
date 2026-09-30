@@ -309,13 +309,17 @@ class WorkflowEngine:
                 self._github_login = ""
         for workflow in self.store.list_workflows():
             if workflow["state"] not in (
-                {s.value for s in {State.NEEDS_INFO, State.BLOCKED} | ACTIVE_STATES}
+                {s.value for s in
+                 {State.NEEDS_INFO, State.BLOCKED, State.NOT_REPRODUCIBLE} | ACTIVE_STATES}
             ):
                 continue
             active = self.store.get_sessions(workflow["id"], active_only=True)
             session = next((s for s in active if s["role"] in
                             {Role.INVESTIGATOR.value, Role.REMEDIATOR.value}), None)
-            waiting = workflow["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value}
+            waiting = workflow["state"] in {
+                State.NEEDS_INFO.value, State.BLOCKED.value,
+                State.NOT_REPRODUCIBLE.value,
+            }
             if not session and not waiting:
                 continue
             comments = await self.github.list_issue_comments(workflow["repo"], workflow["issue_number"])
@@ -337,7 +341,9 @@ class WorkflowEngine:
                     self.store.add_event(workflow["id"], "human_reply_forwarded",
                                          detail={"comment_id": comment["id"], "session_id": session["session_id"]})
                     self.store.set_state(workflow["id"], State.INVESTIGATING if
-                                         workflow["state"] in {State.NEEDS_INFO.value, State.BLOCKED.value}
+                                         workflow["state"] in {State.NEEDS_INFO.value,
+                                                               State.BLOCKED.value,
+                                                               State.NOT_REPRODUCIBLE.value}
                                          else workflow["state"], waiting_since=None)
                 elif workflow["state"] == State.NEEDS_INFO.value:
                     # Clarification was asked by the (now finished) triage session: the
@@ -347,9 +353,11 @@ class WorkflowEngine:
                         workflow["id"], "human_reply_queued_investigation",
                         detail={"comment_id": comment["id"]},
                     )
-                elif workflow["state"] == State.BLOCKED.value:
-                    # Blocked with no live session: resume the last role session
-                    # if possible, otherwise start a fresh one with the context.
+                elif workflow["state"] in {State.BLOCKED.value,
+                                           State.NOT_REPRODUCIBLE.value}:
+                    # Blocked or ended not-reproducible with no live session:
+                    # resume the last role session if possible, otherwise start
+                    # a fresh one carrying the context and the human's reply.
                     await self._resume_or_recover(workflow, comment, login)
                 else:
                     self.store.add_event(
@@ -454,7 +462,8 @@ class WorkflowEngine:
     }
 
     async def _resume_or_recover(self, workflow: dict, comment: dict, login: str) -> None:
-        """A blocked workflow got a human reply but has no live session.
+        """A parked workflow (blocked / not-reproducible) got a human reply
+        but has no live session.
 
         First try resuming the most recent role session — messaging a settled
         Devin session wakes it and preserves all prior context. If resumption
@@ -467,7 +476,7 @@ class WorkflowEngine:
         reply = (
             f"A human reply was posted on GitHub issue #{workflow['issue_number']} "
             f"by {login}:\n\n{comment.get('body', '')}\n\n"
-            "Continue the work that was previously blocked and update the "
+            "Continue the investigation in light of this reply and update the "
             "structured output."
         )
         if last is not None:

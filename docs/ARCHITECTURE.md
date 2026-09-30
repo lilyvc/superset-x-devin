@@ -35,7 +35,7 @@ DISCOVERED --> TRIAGING
                   +--> NEEDS_INFO --human reply--> QUEUED
                   +--> QUEUED --> INVESTIGATING
                                      +--> NEEDS_INFO --human reply--> INVESTIGATING
-                                     +--> NOT_REPRODUCIBLE
+                                     +--> NOT_REPRODUCIBLE --human reply--> role recovery
                                      +--> BLOCKED --human reply--> role recovery
                                      +--> FAILED or ESCALATED
                                      +--> REPRODUCED --> ROOT_CAUSE_FOUND
@@ -153,7 +153,7 @@ The engine asks once for missing structured fields. A second incomplete result m
 The engine stores the latest issue comment ID and ignores bot comments and its own GitHub account.
 For an active Investigator or Remediator, it sends the human reply to the same session.
 For triage clarification without an active session, it queues a new Investigator session.
-For a blocked workflow without an active session, it first tries to resume the latest eligible session.
+For a blocked or not-reproducible workflow without an active session, it first tries to resume the latest eligible session.
 If resume fails, it creates a session with the blocker, question, and human reply in recovery context.
 The engine records reply, resume, and recovery events in SQLite.
 

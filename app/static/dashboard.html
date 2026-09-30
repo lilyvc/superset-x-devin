@@ -83,7 +83,7 @@ function stepNote(w,i){
     return '';
   }
   if(i===1){
-    if(w.state==='NOT_REPRODUCIBLE')return 'could not reproduce — commented on the issue with what was tried';
+    if(w.state==='NOT_REPRODUCIBLE')return 'could not reproduce — commented on the issue; a reply re-opens it';
     if(w.state==='NEEDS_INFO')return 'needs input: '+esc((inv.clarification_question||tri.clarification_question||w.failure_reason||''));
     if(inv.root_cause)return esc(inv.root_cause);
     if(inv.summary)return esc(inv.summary);

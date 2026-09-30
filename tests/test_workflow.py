@@ -573,6 +573,28 @@ def test_blocked_reply_recovers_with_fresh_session(tmp_path):
     assert "human_reply_recovery_session" in kinds
 
 
+def test_not_reproducible_reply_resumes_investigator(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    investigator = next(s for s in store.get_sessions(1)
+                        if s["role"] == "investigator")
+    store.update_session(investigator["session_id"], active=0)
+    store.set_state(1, State.NOT_REPRODUCIBLE,
+                    investigation={"summary": "tried the steps", "reproduced": False})
+    github.comments[1].append({"id": 9, "body": "it only happens on Postgres 14",
+                               "user": {"login": "human"}})
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.INVESTIGATING.value
+    assert store.get_session(investigator["session_id"])["active"] == 1
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "human_reply_resumed_session" in kinds
+
+
 def test_acu_budget_ceiling_stops_dispatch(tmp_path):
     settings = _settings(tmp_path, max_total_acus=0)
     store = Store(settings.db_path)
