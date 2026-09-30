@@ -91,6 +91,15 @@ class Settings:
     remediator_acu_limit: int = int(os.getenv("REMEDIATOR_ACU_LIMIT", "25"))
     analyst_acu_limit: int = int(os.getenv("ANALYST_ACU_LIMIT", "8"))
 
+    # Devin agent mode per role (the sessions API `devin_mode` field). Cheap,
+    # short-verdict roles run lite; remediation gets the strongest mode.
+    # Empty = the organization's default mode.
+    triage_mode: str = os.getenv("TRIAGE_DEVIN_MODE", "lite")
+    dedup_mode: str = os.getenv("DEDUP_DEVIN_MODE", "lite")
+    investigator_mode: str = os.getenv("INVESTIGATOR_DEVIN_MODE", "")
+    remediator_mode: str = os.getenv("REMEDIATOR_DEVIN_MODE", "ultra")
+    analyst_mode: str = os.getenv("ANALYST_DEVIN_MODE", "")
+
     db_path: str = os.getenv("DB_PATH", "orchestrator.db")
 
     # Polling mode: watch the target repo for new issues/comments instead of
@@ -102,6 +111,10 @@ class Settings:
     # When false, issues that already exist at startup are baselined (not
     # dispatched); when true the open-issues backlog is discovered too.
     poll_backlog: bool = _env_bool("POLL_BACKLOG", True)
+
+    def role_devin_mode(self, role: str) -> str | None:
+        # role is a Role enum value: triage/investigator/remediator/dedup/analyst
+        return getattr(self, f"{role}_mode", "") or None
 
     @property
     def devin_use_v3(self) -> bool:

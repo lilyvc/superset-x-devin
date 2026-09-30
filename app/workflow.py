@@ -698,6 +698,7 @@ class WorkflowEngine:
             tags=tags, structured_output_schema=schema,
             max_acu_limit=limit if self.settings.max_acu_limit is None else min(limit, self.settings.max_acu_limit),
             repos=[workflow["repo"]],
+            devin_mode=self.settings.role_devin_mode(role.value),
         )
         session_url = session.get("url") or (
             f"https://app.devin.ai/sessions/"
