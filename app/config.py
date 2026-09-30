@@ -86,6 +86,10 @@ class Settings:
     # After this long in CI_CHECKING a one-time ci_timeout event is recorded so
     # a stalled pipeline is visible on the issue timeline. 0 = never.
     ci_timeout_seconds: float = float(os.getenv("CI_TIMEOUT_SECONDS", "14400"))
+    # Watchdog for Devin sessions that never settle: after this long an active
+    # session is nudged once to finish and emit its structured output, and at
+    # twice this long the workflow is escalated for a human. 0 = never.
+    session_stall_seconds: float = float(os.getenv("SESSION_STALL_SECONDS", "5400"))
     analysis_enabled: bool = _env_bool("ANALYSIS_ENABLED", True)
     investigator_acu_limit: int = int(os.getenv("INVESTIGATOR_ACU_LIMIT", "10"))
     remediator_acu_limit: int = int(os.getenv("REMEDIATOR_ACU_LIMIT", "25"))

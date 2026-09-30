@@ -192,6 +192,12 @@ implied green result. `CI_TIMEOUT_SECONDS` (default 4h) bounds the wait and
 records a `ci_timeout` event. Set `CI_REQUIRED=false` only for targets without
 CI — the gate is then skipped and `ci_status` shows `skipped` honestly.
 
+A session that keeps running without ever settling would otherwise hold its
+concurrency slot indefinitely, so after `SESSION_STALL_SECONDS` the engine sends
+the session one message asking it to report what it has (including partial or
+negative results), and at twice that it closes the session out and moves the
+workflow to `ESCALATED` with a comment on the issue.
+
 ### Dedup gate
 
 Before a Remediator session is dispatched, a cheap reconciliation step scans
@@ -369,6 +375,7 @@ GitHub comment writes while keeping the same state-machine path.
 | `DEDUP_ACU_LIMIT` | `3` | ACU cap for the Dedup adjudication session |
 | `CI_REQUIRED` | `true` | Require the fix PR's GitHub checks to pass before `READY_FOR_REVIEW` |
 | `CI_TIMEOUT_SECONDS` | `14400` | Bound on the CI wait; records `ci_timeout` and keeps `CI_CHECKING` |
+| `SESSION_STALL_SECONDS` | `5400` | Nudge a Devin session that never settles; escalate the workflow at twice this |
 | `ADMIN_TOKEN` | empty | Bearer token for `POST /admin/poll-now`; required for that endpoint |
 | `MAX_TOTAL_ACUS` | unset | Organization-level ACU budget ceiling across all sessions |
 | `REMEDIATION_LABEL` | empty | Legacy orchestrator label setting; the active engine records `remediation_started_at` |

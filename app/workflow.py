@@ -362,7 +362,10 @@ class WorkflowEngine:
             last_polled_at=utcnow(),
         )
         settled = detail in {"final", "waiting"}
-        if not settled or fp == row.get("acted_fingerprint"):
+        if not settled:
+            await self._check_stalled(row)
+            return
+        if fp == row.get("acted_fingerprint"):
             return
         workflow = self.store.get_workflow_by_id(row["workflow_id"])
         if not workflow:
@@ -378,6 +381,47 @@ class WorkflowEngine:
             await self._handle_analyst(row, workflow, output, fp)
         elif role == Role.DEDUP.value:
             await self._handle_dedup(row, workflow, output, detail, fp)
+
+    async def _check_stalled(self, row: dict) -> None:
+        """A session that keeps running without ever settling would hold its
+        concurrency slot forever, so nudge it once and then escalate."""
+        limit = self.settings.session_stall_seconds
+        started = _parse_dt(row.get("created_at"))
+        if limit <= 0 or started is None:
+            return
+        age = (_now_ts() - started).total_seconds()
+        if age < limit:
+            return
+        if age < limit * 2:
+            if row.get("stall_nudged"):
+                return
+            self.store.update_session(row["session_id"], stall_nudged=1)
+            self.store.add_event(
+                row["workflow_id"], "session_stall_nudged",
+                detail=f"{row['role']} session running for {age / 3600:.1f}h without a verdict",
+            )
+            await self.devin.send_message(
+                row["session_id"],
+                "Orchestrator: this session has been running without producing a verdict. "
+                "Please stop any further work, and report what you have now by setting the "
+                "structured output required by your instructions — including partial or "
+                "negative results and any blockers.",
+            )
+            return
+        self.store.update_session(row["session_id"], active=0, finished_at=utcnow())
+        workflow = self.store.get_workflow_by_id(row["workflow_id"])
+        if workflow and workflow["state"] not in TERMINAL_STATES:
+            self.store.set_state(
+                workflow["id"], State.ESCALATED,
+                failure_reason=f"{row['role']} session stalled for {age / 3600:.1f}h "
+                               "without structured output",
+            )
+            await self._comment(
+                workflow,
+                f"**Escalating to a human** — the {row['role']} Devin session "
+                f"({row.get('url')}) ran for {age / 3600:.1f} hours without reporting a "
+                "verdict, so the orchestrator stopped waiting on it.",
+            )
 
     async def _handle_triage(self, row, workflow, out, session_kind, fp):
         """Cheap intake verdict: queue for investigation, ask the reporter, or skip."""

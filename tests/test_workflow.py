@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -492,6 +493,52 @@ def test_acu_budget_ceiling_stops_dispatch(tmp_path):
     asyncio.run(engine.tick())
     assert store.count_active_sessions() == 0
     assert store.get_workflow("owner/repo", 1)["state"] == State.QUEUED.value
+
+
+class StuckDevin(DevinClient):
+    """A Devin session that keeps running and never reports a verdict."""
+
+    def __init__(self):
+        super().__init__("")
+        self.nudges = []
+
+    async def get_session(self, session_id):
+        return {"status": "running", "status_detail": "working", "structured_output": {}}
+
+    async def send_message(self, session_id, message):
+        self.nudges.append((session_id, message))
+        return {}
+
+
+def _age_session(store, session_id, hours):
+    old = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    store.update_session(session_id, created_at=old)
+
+
+def test_stalled_session_is_nudged_then_escalated(tmp_path):
+    settings = _settings(tmp_path, session_stall_seconds=3600)
+    store = Store(settings.db_path)
+    github = FakeGitHub([_issue()])
+    devin = StuckDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session_id = store.get_sessions(1)[0]["session_id"]
+
+    _age_session(store, session_id, hours=1.5)
+    asyncio.run(engine.tick())
+    assert len(devin.nudges) == 1
+    assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
+
+    # A nudge is sent once, not on every tick.
+    asyncio.run(engine.tick())
+    assert len(devin.nudges) == 1
+
+    _age_session(store, session_id, hours=3)
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.ESCALATED.value
+    assert "stalled" in workflow["failure_reason"]
+    assert store.count_active_sessions() == 0
 
 
 def test_validate_skills_fails_when_missing(tmp_path):

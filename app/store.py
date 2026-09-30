@@ -83,7 +83,8 @@ class Store:
                     structured_output TEXT, output_fingerprint TEXT,
                     acted_fingerprint TEXT DEFAULT '', pull_requests TEXT,
                     created_at TEXT, last_polled_at TEXT, finished_at TEXT,
-                    active INTEGER DEFAULT 1, attempts INTEGER DEFAULT 0
+                    active INTEGER DEFAULT 1, attempts INTEGER DEFAULT 0,
+                    stall_nudged INTEGER DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER,
@@ -94,6 +95,7 @@ class Store:
             )
             self._ensure_columns(conn, "sessions", {
                 "acted_fingerprint": "TEXT DEFAULT ''", "attempts": "INTEGER DEFAULT 0",
+                "stall_nudged": "INTEGER DEFAULT 0",
             })
             self._ensure_columns(conn, "workflows", {
                 "updated_at": "TEXT", "last_comment_id": "INTEGER DEFAULT 0",
