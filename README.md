@@ -1,18 +1,7 @@
 # superset-x-devin: GitHub issue-to-fix service
 
-This external service processes GitHub issues in `TARGET_REPO`. Devin investigates issues and prepares pull requests (PRs) with code changes.
+An external service that autonomously fixes issues in `TARGET_REPO` using Devin sessions. Devin triages, reproduces, and remediates issues, then opens PRs for human review. A dashboard tracks every issue's progress, cost, and evidence.
 The service stores its state outside the target repository. It does not install an application or agent there.
-
-## The problem
-
-Engineers must decide which reports describe real problems.
-They must reproduce each problem, find its root cause, and plan a safe fix.
-
-## The result
-
-The service does this work and asks an engineer for help when it cannot continue safely.
-The goal is not to create the most autonomous PRs.
-The goal is to get a trustworthy fix with the least engineer attention.
 
 ## How it works
 
@@ -23,7 +12,9 @@ The goal is to get a trustworthy fix with the least engineer attention.
 5. The Remediator prepares a fix and reports test results.
 6. Python checks the Remediator's evidence and the PR's GitHub CI results.
 7. The workflow reaches `READY_FOR_REVIEW` when required checks pass.
-8. The service marks a merged PR as `COMPLETED`. It asks a human for help when a workflow is `NEEDS_INFO` or `BLOCKED`.
+8. Once a fix PR exists, the Retro Devin searches for related defect patterns and files follow-up issues.
+9. The service marks a merged PR as `COMPLETED`. It asks a human for help when a workflow is `NEEDS_INFO` or `BLOCKED`.
+10. Comments on tracked issues and PRs reach the active Devin session — or resume it when it has finished.
 
 The service can also mark an issue `NOT_REPRODUCIBLE`, `SKIPPED`, `FAILED`, or `ESCALATED`.
 

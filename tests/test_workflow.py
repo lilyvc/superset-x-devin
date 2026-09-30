@@ -139,9 +139,11 @@ def test_dry_run_state_machine_restart_safe(tmp_path):
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.REMEDIATING.value
     sessions = store.get_sessions(1)
-    assert {s["role"] for s in sessions} == {"investigator", "remediator", "analyst"}
+    assert {s["role"] for s in sessions} == {"investigator", "remediator"}
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.READY_FOR_REVIEW.value
+    # The analyst only runs once a fix PR exists.
+    assert "analyst" in {s["role"] for s in store.get_sessions(1)}
     count = len(store.get_sessions(1))
     restarted = WorkflowEngine(settings, store, github, DevinClient(""))
     asyncio.run(restarted.tick())
@@ -373,13 +375,14 @@ def test_ready_for_review_requires_green_ci(tmp_path):
     workflow = store.get_workflow("owner/repo", 1)
     assert workflow["state"] == State.CI_CHECKING.value
     assert workflow["ci_status"] == "failed"
-    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
-    assert any("CI checks are failing" in c for c in comments)
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"
+                and "CI checks are failing" in e["detail"]]
+    assert len(comments) == 1
     # A second poll must not re-post the failure comment.
-    count = len(comments)
     asyncio.run(engine.tick())
-    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"]
-    assert len(comments) == count
+    comments = [e["detail"] for e in store.get_events(1) if e["kind"] == "comment_posted"
+                and "CI checks are failing" in e["detail"]]
+    assert len(comments) == 1
     # Green CI then promotes the PR.
     github.checks = {"check_runs": [
         {"name": "unit tests", "status": "completed", "conclusion": "success"},
@@ -568,6 +571,28 @@ def test_blocked_reply_recovers_with_fresh_session(tmp_path):
     assert sessions[-1]["role"] == "investigator"
     kinds = {e["kind"] for e in store.get_events(1)}
     assert "human_reply_recovery_session" in kinds
+
+
+def test_not_reproducible_reply_resumes_investigator(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = DevinClient("")
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    investigator = next(s for s in store.get_sessions(1)
+                        if s["role"] == "investigator")
+    store.update_session(investigator["session_id"], active=0)
+    store.set_state(1, State.NOT_REPRODUCIBLE,
+                    investigation={"summary": "tried the steps", "reproduced": False})
+    github.comments[1].append({"id": 9, "body": "it only happens on Postgres 14",
+                               "user": {"login": "human"}})
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.INVESTIGATING.value
+    assert store.get_session(investigator["session_id"])["active"] == 1
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "human_reply_resumed_session" in kinds
 
 
 def test_acu_budget_ceiling_stops_dispatch(tmp_path):

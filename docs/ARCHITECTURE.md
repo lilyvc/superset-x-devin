@@ -35,7 +35,7 @@ DISCOVERED --> TRIAGING
                   +--> NEEDS_INFO --human reply--> QUEUED
                   +--> QUEUED --> INVESTIGATING
                                      +--> NEEDS_INFO --human reply--> INVESTIGATING
-                                     +--> NOT_REPRODUCIBLE
+                                     +--> NOT_REPRODUCIBLE --human reply--> role recovery
                                      +--> BLOCKED --human reply--> role recovery
                                      +--> FAILED or ESCALATED
                                      +--> REPRODUCED --> ROOT_CAUSE_FOUND
@@ -80,7 +80,7 @@ The dispatcher uses this order:
 | Order | Role | Condition |
 |---:|---|---|
 | 1 | Remediator | Investigation reached `ROOT_CAUSE_FOUND`; the duplicate gate is clear |
-| 2 | Analyst | `ANALYSIS_ENABLED=true`; state is `ROOT_CAUSE_FOUND`, `REMEDIATING`, `VERIFYING`, `PR_OPENED`, `CI_CHECKING`, or `READY_FOR_REVIEW` |
+| 2 | Retro Devin (`analyst` role) | `ANALYSIS_ENABLED=true`; state is `PR_OPENED`, `CI_CHECKING`, `READY_FOR_REVIEW`, or `COMPLETED` — defect-family analysis only runs once a fix PR exists, so failed remediations cost no analyst ACUs; never runs on `DEVIN_DISCOVERED` issues |
 | 3 | Investigator | Workflow state is `QUEUED` |
 | 4 | Triage | Workflow state is `DISCOVERED` and `TRIAGE_ENABLED=true` |
 
@@ -97,7 +97,7 @@ After `SESSION_STALL_SECONDS`, the engine nudges a stalled session once. At twic
 | Investigator | Reproduces an issue and reports root-cause evidence |
 | Remediator | Changes code, runs tests, and reports PR verification |
 | Dedup | Checks whether a candidate open PR already fixes the issue |
-| Analyst | Reports related issues and engineering risks |
+| Retro Devin (`analyst` role) | Reports related issues and engineering risks; files a `devin-analysis` follow-up issue for the defect family |
 
 ### Intake and triage
 
@@ -153,7 +153,7 @@ The engine asks once for missing structured fields. A second incomplete result m
 The engine stores the latest issue comment ID and ignores bot comments and its own GitHub account.
 For an active Investigator or Remediator, it sends the human reply to the same session.
 For triage clarification without an active session, it queues a new Investigator session.
-For a blocked workflow without an active session, it first tries to resume the latest eligible session.
+For a blocked or not-reproducible workflow without an active session, it first tries to resume the latest eligible session.
 If resume fails, it creates a session with the blocker, question, and human reply in recovery context.
 The engine records reply, resume, and recovery events in SQLite.
 
@@ -168,7 +168,7 @@ The same bot and self filters as issue replies apply.
 
 The `issue_origins` table records each issue's origin, parent issue number, Devin session ID, and creation time.
 The workflow row stores `origin`, `parent_issue_number`, and `discovered_by_session_id`.
-When an Analyst records a follow-up issue, the engine links it to the parent workflow and session.
+When the Retro Devin records a follow-up issue, the engine links it to the parent workflow and session. Issues with `DEVIN_DISCOVERED` provenance never get a retro of their own, so follow-ups cannot recurse into more follow-ups. An origin is recorded only when the follow-up issue is not already tracked.
 The poller later discovers the issue and applies the stored provenance.
 The dashboard marks human-reported issues and Devin-discovered issues.
 The issue page shows parent and child links.
@@ -191,18 +191,14 @@ After restart, the engine reads active sessions from SQLite and reconciles them 
 
 ## Dashboard and API
 
-- The dashboard shows four KPIs: `Bugs handled`, `Verified fixes`, `Median time to fix`, and `Needs human`.
-- The `Needs human` KPI counts workflows in `NEEDS_INFO` and `BLOCKED`.
-- An expandable Issues list shows a vertical nine-step tracker and origin markers.
-- The markers identify reported issues and Devin-discovered issues from parent issues.
-- A panel titled Latest verified fix shows fix evidence and CI status.
-- The panel selects the newest workflow with a PR URL; it does not require passing CI.
-- The Operations section starts collapsed. It shows the funnel, workflow lanes, latencies, sessions, and ACUs.
-- The issue page shows the tracker, structured outputs, events, and provenance links.
+- The dashboard shows four KPIs: `Open issues`, `Working now`, `Waiting on a human`, and `Fixed & verified`, plus percent of merged PRs merged without changes and total ACUs.
+- `Waiting on a human` counts workflows in `READY_FOR_REVIEW`, `NEEDS_INFO`, `BLOCKED`, `FAILED`, and `ESCALATED` — anything where the next action is a person's.
+- The Issues list shows each workflow with a PR status badge and a Devin-discovered marker. Expanding a row shows a four-step tracker (Triaging, Investigating, Remediating, PR ready for review) with one-line results per step and links into each Devin session.
+- The issue page shows the same tracker plus a fifth, dashed "Related defect analysis" step, the Retro results detail, and the GitHub issue and PR links.
+- `READY_FOR_REVIEW` requires green GitHub checks on the PR head commit; merged PRs mark `COMPLETED`.
 
-The `executive` metrics fields are `bugs_handled`, `verified_fixes`, `median_time_to_fix`, `needs_human`, `defects_discovered`, and `acus_per_verified_fix`.
-`bugs_handled` counts stored workflows. `verified_fixes` counts workflows in `READY_FOR_REVIEW` or `COMPLETED`.
-`median_time_to_fix` measures discovery to PR open time. `needs_human` counts `NEEDS_INFO` and `BLOCKED` workflows.
+The `executive` metrics fields are `issues_open`, `in_progress`, `awaiting_human`, `awaiting_review`, `awaiting_input`, `awaiting_blocked`, `solved`, `merged_without_changes_pct`, `bugs_handled`, `verified_fixes`, `median_time_to_fix`, `needs_human`, `defects_discovered`, and `acus_per_verified_fix`.
+`median_time_to_fix` measures discovery to PR open time, minus time parked in `NEEDS_INFO` or `BLOCKED`. `merged_without_changes_pct` compares the recorded PR head sha at open time to the sha at merge.
 
 | Route | Purpose |
 |---|---|
@@ -213,7 +209,7 @@ The `executive` metrics fields are `bugs_handled`, `verified_fixes`, `median_tim
 | `GET /api/workflows/{repo_owner}/{repo}/{number}` | One workflow with sessions, events, parent, and children |
 | `GET /healthz` | Service status, target repository, and dry-run flag |
 | `POST /admin/poll-now` | Runs one serialized workflow tick |
-| `POST /webhooks/github` | Accepts signed issue, comment, and ping events |
+| `POST /webhooks/github` | Accepts signed issue, issue comment, PR review, PR review comment, and ping events |
 
 ## Security model
 
