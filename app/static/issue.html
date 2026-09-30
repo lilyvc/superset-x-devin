@@ -89,7 +89,7 @@ function stepsHtml(w){
 async function load(){
   const h=await fetch('/healthz').then(r=>r.json());
   const w=await fetch(`/api/workflows/${h.target_repo}/${number}`).then(r=>{if(!r.ok)throw new Error('not found');return r.json()});
-  $('#title').textContent=`#${w.issue_number} ${w.title||''}`;
+  $('#title').textContent=`Issue #${w.issue_number} ${w.title||''}`;
   $('#state').innerHTML=`<span class="pill ${w.state}">${w.state.replace(/_/g,' ')}</span>`;
   const devinFiled=w.origin==='DEVIN_DISCOVERED';
   const rows=[];

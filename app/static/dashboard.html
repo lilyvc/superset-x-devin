@@ -28,7 +28,6 @@
     <div class="worklist" id="worklist"></div>
   </section>
 
-  <p class="foot">The goal isn’t to maximize the number of autonomous PRs — it’s to minimize the engineer attention required to turn a bug report into a trustworthy fix.</p>
 </main>
 <script>
 const $=s=>document.querySelector(s);
@@ -46,7 +45,6 @@ const OUTCOME={
   TRIAGING:['Triaging','TRIAGING'],QUEUED:['Queued','QUEUED'],DISCOVERED:['New','DISCOVERED'],
 };
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}
-const hm=iso=>iso?new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'–';
 let repo='';
 const OPEN=new Set();
 
@@ -131,10 +129,9 @@ function sessionsHtml(w){
   const ss=(w.sessions||[]);
   if(!ss.length)return '';
   const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
-  return `<div class="sesslist small">${ss.map(s=>{
-    const span=s.finished_at?`${hm(s.created_at)}–${hm(s.finished_at)}`:`${hm(s.created_at)} · running`;
-    return `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${roleLabel[s.role]||esc(s.role)} ↗</a><span class="muted">${span}${s.acus!=null?` · ${(+s.acus).toFixed(1)} ACU`:''}</span>`;
-  }).join('<span class="muted"> · </span>')}</div>`;
+  return `<div class="sesslist small">${ss.map(s=>
+    `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${roleLabel[s.role]||esc(s.role)} ↗</a>`
+  ).join('<span class="muted"> · </span>')}</div>`;
 }
 function rowHtml(w){
   const n=w.issue_number;
@@ -142,7 +139,7 @@ function rowHtml(w){
   return `<div class="wl-item${OPEN.has(n)?' open':''}" data-n="${n}">
     <div class="wl-head">
       <span class="caret">▸</span>
-      <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>#${n}</b></a> ${esc(w.title||'')} ${originTag(w)} ${prBadge(w)}</span>
+      <span class="wl-title"><a href="/issues/${n}" onclick="event.stopPropagation()"><b>issue #${n}</b></a> ${esc(w.title||'')} ${originTag(w)} ${prBadge(w)}</span>
       <span class="wl-state">${outcome(w)}<span class="muted small">${waiting}</span></span>
     </div>
     <div class="wl-body">
@@ -151,7 +148,7 @@ function rowHtml(w){
       <div class="wl-meta small muted">
         ${w.discovered_at?`discovered ${new Date(w.discovered_at).toLocaleDateString()}`:''}${w.failure_reason&&w.state!=='SKIPPED'?` · ${esc(w.failure_reason)}`:''}
       </div>
-      <div class="small" style="margin-top:6px"><a href="${esc(w.issue_url||'#')}" target="_blank">GitHub issue →</a> &nbsp;·&nbsp; <a href="/issues/${n}">Full detail →</a></div>
+      <div class="small" style="margin-top:6px"><a href="/issues/${n}">Full detail →</a></div>
     </div>
   </div>`;
 }
