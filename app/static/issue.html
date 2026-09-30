@@ -104,9 +104,14 @@ async function load(){
   if(rows.length){$('#provenance').style.display='';$('#provenance').innerHTML=rows.join('');}
   $('#steps').innerHTML=stepsHtml(w);
   const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
+  const real=/(?:devin-)?[0-9a-f]{32}/;
   $('#sessions').innerHTML=(w.sessions||[]).map(s=>{
     const span=s.finished_at?`${hm(s.created_at)}–${hm(s.finished_at)}`:`${hm(s.created_at)} · running`;
-    return `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">${roleLabel[s.role]||esc(s.role)} ↗</a><span class="muted">${span}${s.acus!=null?` · ${(+s.acus).toFixed(1)} ACU`:''}</span>`;
+    const label=`${roleLabel[s.role]||esc(s.role)}`;
+    const linked=real.test(s.session_id||'')
+      ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.session_id)}">${label} ↗</a>`
+      : `<span class="muted">${label}</span>`;
+    return `${linked}<span class="muted">${span}${s.acus!=null?` · ${(+s.acus).toFixed(1)} ACU`:''}</span>`;
   }).join('<span class="muted"> · </span>')||'<span class="muted">no sessions yet</span>';
   $('#meta').textContent=[w.discovered_at&&`discovered ${new Date(w.discovered_at).toLocaleDateString()}`,w.pr_opened_at&&`PR opened ${new Date(w.pr_opened_at).toLocaleDateString()}`].filter(Boolean).join(' · ');
   $('#issue').innerHTML=kv([['Repo',esc(w.repo)],['Issue',`<a href="${esc(w.issue_url)}" target="_blank">${esc(w.issue_url)}</a>`],['Author',esc(w.author)],['Labels',(w.labels||[]).map(l=>`<span class="pill">${esc(l)}</span>`).join(' ')]]);

@@ -129,9 +129,13 @@ function sessionsHtml(w){
   const ss=(w.sessions||[]);
   if(!ss.length)return '';
   const roleLabel={triage:'Triage',investigator:'Investigator',remediator:'Remediator',analyst:'Analyst',dedup:'Dedup check'};
-  return `<div class="sesslist small">${ss.map(s=>
-    `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${roleLabel[s.role]||esc(s.role)} ↗</a>`
-  ).join('<span class="muted"> · </span>')}</div>`;
+  const real=/(?:devin-)?[0-9a-f]{32}/;
+  return `<div class="sesslist small">${ss.map(s=>{
+    const label=roleLabel[s.role]||esc(s.role);
+    return real.test(s.id||'')
+      ? `<a class="sess" href="${esc(s.url)}" target="_blank" title="${esc(s.id)}">${label} ↗</a>`
+      : `<span class="muted">${label}</span>`;
+  }).join('<span class="muted"> · </span>')}</div>`;
 }
 function rowHtml(w){
   const n=w.issue_number;
