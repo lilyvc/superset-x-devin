@@ -4,3 +4,4 @@ __pycache__/
 orchestrator.db
 .venv/
 .pytest_cache/
+live_orchestrator.db
