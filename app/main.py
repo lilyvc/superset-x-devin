@@ -33,13 +33,11 @@ async def lifespan(app: FastAPI):
     validate_skills()
     store = Store(settings.db_path)
     github = GitHubClient(settings.github_token, settings.github_api_url)
-    devin = DevinClient("" if settings.dry_run else settings.devin_api_key,
+    devin = DevinClient(settings.devin_api_key,
                         settings.devin_api_base_url, settings.devin_org_id)
     engine = WorkflowEngine(settings, store, github, devin)
     app.state.engine, app.state.store = engine, store
     app.state.tick_lock = asyncio.Lock()
-    if settings.dry_run:
-        logger.warning("DRY_RUN is on — external writes are disabled")
     poller_task = None
     if settings.enable_polling:
         await engine.tick()
@@ -77,7 +75,7 @@ def verify_signature(secret: str, body: bytes, signature_header: str | None) -> 
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "target_repo": settings.target_repo, "dry_run": settings.dry_run}
+    return {"ok": True, "target_repo": settings.target_repo}
 
 
 @app.post("/admin/poll-now")
