@@ -156,7 +156,6 @@ async function load(){
       ${(rem.regression_tests_added||[]).length?`<div>Regression tests added ✓</div>`:''}
       ${rem.reproduction_rerun_passed?`<div>Original reproduction passes ✓</div>`:''}
       ${w.ci_status?`<div>CI: ${esc(w.ci_status)}</div>`:''}
-      ${(w.events||[]).filter(e=>e.kind==='knowledge_learned').map(e=>{const d=JSON.parse(e.detail||'{}');return `<div>Learned from review → Devin Knowledge: <i>${esc(d.rule)}</i></div>`}).join('')}
       ${sessLink(byRole('remediator'),'Open remediation →')}`);
   }
   if(Object.keys(ana).length){
