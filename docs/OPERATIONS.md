@@ -129,6 +129,11 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `INVESTIGATOR_ACU_LIMIT` | `10` | ACU cap for an Investigator session |
 | `REMEDIATOR_ACU_LIMIT` | `25` | ACU cap for a Remediator session |
 | `ANALYST_ACU_LIMIT` | `8` | ACU cap for a Retro Devin session |
+| `TRIAGE_DEVIN_MODE` | `lite` | Agent mode for a Triage session |
+| `DEDUP_DEVIN_MODE` | `lite` | Agent mode for a Dedup session |
+| `INVESTIGATOR_DEVIN_MODE` | empty | Agent mode for an Investigator session |
+| `REMEDIATOR_DEVIN_MODE` | `fusion` | Agent mode for a Remediator session |
+| `ANALYST_DEVIN_MODE` | empty | Agent mode for a Retro Devin session |
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose uses `/data/orchestrator.db` |
 | `ENABLE_POLLING` | `false` | Starts periodic GitHub polling |
 | `GITHUB_POLL_INTERVAL_SECONDS` | `30` | Delay between polling ticks |

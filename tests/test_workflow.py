@@ -616,6 +616,33 @@ def test_acu_budget_ceiling_stops_dispatch(tmp_path):
     assert store.get_workflow("owner/repo", 1)["state"] == State.QUEUED.value
 
 
+class SpyDevin(DevinClient):
+    def __init__(self):
+        super().__init__("")
+        self.created = []
+
+    async def create_session(self, prompt, **kwargs):
+        self.created.append(kwargs)
+        return await super().create_session(prompt, **kwargs)
+
+
+def test_role_devin_modes(tmp_path):
+    settings = _settings(tmp_path, triage_enabled=True)
+    store = Store(settings.db_path)
+    devin = SpyDevin()
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), devin)
+    for _ in range(4):
+        asyncio.run(engine.tick())
+    modes = {}
+    for c in devin.created:
+        role = next(t.split(":", 1)[1] for t in c["tags"] if t.startswith("role:"))
+        modes[role] = c["devin_mode"]
+    assert modes["triage"] == "lite"
+    assert modes["investigator"] is None
+    assert modes["remediator"] == "fusion"
+    assert modes["analyst"] is None
+
+
 class StuckDevin(DevinClient):
     """A Devin session that keeps running and never reports a verdict."""
 
