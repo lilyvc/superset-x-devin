@@ -136,6 +136,18 @@ INVESTIGATION_SCHEMA = {
             "screenshot/recording URLs, log excerpts. Each item is a short label + "
             "the evidence or a URL to it.",
         },
+        "current_behavior_intent": {
+            "type": "string",
+            "description": "One of: BUG, DELIBERATE, UNCLEAR. DELIBERATE if existing tests "
+            "assert the current behaviour, docs describe it, or git history shows it was "
+            "added on purpose. UNCLEAR if the right behaviour is a product choice.",
+        },
+        "intent_evidence": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Tests, docs, commits or upstream issues you checked to decide "
+            "current_behavior_intent, each with what it shows.",
+        },
         "root_cause": {"type": "string"},
         "root_cause_confidence": {
             "type": "string",
@@ -194,6 +206,8 @@ next. Fill it truthfully:
 - status = REPRODUCED only if you actually observed the bug (failing test,
   wrong API response, wrong UI behavior) and put the proof in
   reproduction_evidence. Code reading alone is NOT reproduction.
+- Before reporting REPRODUCED, decide whether current behavior is a bug or
+  deliberate; showing the code does what the code says is not a bug.
 - status = NEEDS_INFO if the report is ambiguous or the expected behavior is
   a product decision you cannot infer. Put ONE concise, answerable question in
   clarification_question and set needs_info_kind. Never invent requirements.

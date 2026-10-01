@@ -8,7 +8,12 @@ from typing import ClassVar
 
 from .config import Settings
 from .devin_status import session_state
-from .gates import ci_verdict, dedup_candidates, failing_check_links, intake_skip_reason
+from .gates import (
+    ci_verdict,
+    dedup_candidates,
+    failing_check_links,
+    intake_skip_reason,
+)
 from .github_client import GitHubClient
 from .handlers import ROLE_HANDLERS, SettledSession
 from .parsing import (
@@ -33,7 +38,15 @@ from .prompts import (
     remediator_prompt,
     triage_prompt,
 )
-from .states import ACTIVE_STATES, TERMINAL_STATES, Origin, Role, SkipReason, State
+from .states import (
+    ACTIVE_STATES,
+    TERMINAL_STATES,
+    NeedsInfoKind,
+    Origin,
+    Role,
+    SkipReason,
+    State,
+)
 from .store import Store, utcnow
 
 logger = logging.getLogger("workflow")
@@ -178,8 +191,14 @@ class WorkflowEngine:
 
     async def _reconcile_prs(self) -> None:
         states = {State.PR_OPENED.value, State.CI_CHECKING.value,
-                  State.READY_FOR_REVIEW.value}
+                  State.READY_FOR_REVIEW.value, State.BLOCKED.value}
         for workflow in self.store.list_workflows(states):
+            behavior_change_held = (
+                workflow["state"] == State.BLOCKED.value
+                and workflow.get("needs_info_kind") == NeedsInfoKind.BEHAVIOR_CHANGE.value
+            )
+            if workflow["state"] == State.BLOCKED.value and not behavior_change_held:
+                continue
             if not workflow.get("pr_number"):
                 continue
             try:
@@ -204,7 +223,10 @@ class WorkflowEngine:
                         failure_reason="PR closed without merge",
                     )
                     continue
-                if workflow["state"] == State.READY_FOR_REVIEW.value:
+                if (
+                    workflow["state"] == State.READY_FOR_REVIEW.value
+                    or behavior_change_held
+                ):
                     continue
                 if workflow.get("ci_fix_pr_url") and not workflow.get("ci_fix_pr_merged"):
                     await self._check_ci_fix_pr(workflow)
@@ -457,6 +479,39 @@ class WorkflowEngine:
                 login = user.get("login", "")
                 if (user.get("type") == "Bot" or login.endswith("[bot]")
                         or comment.get("id") in own_ids):
+                    continue
+                if (
+                    workflow["state"] == State.BLOCKED.value
+                    and workflow.get("needs_info_kind") == NeedsInfoKind.BEHAVIOR_CHANGE.value
+                ):
+                    if self._trusted_reviewer(comment):
+                        self.store.add_event(
+                            workflow["id"], "behavior_change_approved",
+                            detail={"login": login, "comment_id": comment["id"]},
+                        )
+                        if self.settings.ci_required:
+                            self.store.set_state(
+                                workflow["id"], State.CI_CHECKING,
+                                ci_status="pending", needs_info_kind=None,
+                                waiting_since=None,
+                            )
+                        else:
+                            self.store.set_state(
+                                workflow["id"], State.READY_FOR_REVIEW,
+                                ci_status="skipped", needs_info_kind=None,
+                                waiting_since=None,
+                            )
+                        await self.comment(
+                            workflow, f"Approved by @{login}. Continuing to CI.",
+                        )
+                        break
+                    self.store.add_event(
+                        workflow["id"], "human_comment_unforwarded",
+                        detail={
+                            "comment_id": comment["id"],
+                            "reason": "behaviour change needs a maintainer",
+                        },
+                    )
                     continue
                 if session:
                     await self.devin.send_message(

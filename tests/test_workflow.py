@@ -7,10 +7,15 @@ import pytest
 
 from app.config import Settings
 from app.devin_client import DevinClient
-from app.gates import investigation_gate, verification_gate
-from app.handlers import SettledSession, handle_analyst
+from app.gates import changed_test_expectations, investigation_gate, verification_gate
+from app.handlers import (
+    SettledSession,
+    handle_analyst,
+    handle_investigator,
+    handle_remediator,
+)
 from app.parsing import issue_number_from_url
-from app.states import State
+from app.states import NeedsInfoKind, SkipReason, State
 from app.store import Store
 from app.workflow import WorkflowEngine
 
@@ -20,6 +25,8 @@ def _investigation():
         "status": "REPRODUCED", "enough_information": True, "reproduced": True,
         "expected_behavior": "expected", "observed_behavior": "observed",
         "reproduction_steps": ["step"], "reproduction_evidence": ["evidence"],
+        "current_behavior_intent": "BUG",
+        "intent_evidence": ["Checked tests, docs, and history for deliberate behavior."],
         "root_cause": "cause", "verification_plan": ["test"], "summary": "summary",
     }
 
@@ -35,18 +42,51 @@ def _remediation():
 @pytest.mark.parametrize("field", [
     "status", "enough_information", "reproduced", "expected_behavior",
     "observed_behavior", "reproduction_steps", "reproduction_evidence",
-    "root_cause", "verification_plan",
+    "current_behavior_intent", "intent_evidence", "root_cause", "verification_plan",
 ])
 def test_investigation_gate_each_missing_field(field):
     output = _investigation()
-    if field in {"status", "expected_behavior", "observed_behavior", "root_cause"}:
+    if field in {"status", "expected_behavior", "observed_behavior",
+                 "current_behavior_intent", "root_cause"}:
         output[field] = "" if field != "status" else "BLOCKED"
-    elif field in {"reproduction_steps", "reproduction_evidence", "verification_plan"}:
+    elif field in {"reproduction_steps", "reproduction_evidence",
+                   "intent_evidence", "verification_plan"}:
         output[field] = []
     else:
         output[field] = False
     ok, reasons = investigation_gate(output)
     assert not ok and reasons
+
+
+def test_changed_test_expectations_only_reports_removed_assertions():
+    files = [
+        {
+            "filename": "tests/test_existing.py",
+            "status": "modified",
+            "patch": (
+                "@@ -1,5 +1,2 @@\n"
+                "-import os\n"
+                "-from collections import Counter\n"
+                "-\n"
+                "-# old behavior\n"
+                "-assert value == 0\n"
+            ),
+        },
+        {
+            "filename": "tests/test_added.py",
+            "status": "added",
+            "patch": "@@ -0,0 +1 @@\n-assert value == 1\n",
+        },
+        {
+            "filename": "app/module.py",
+            "status": "modified",
+            "patch": "@@ -1 +1 @@\n-assert value == 2\n",
+        },
+    ]
+
+    assert changed_test_expectations(files) == [
+        "tests/test_existing.py: assert value == 0",
+    ]
 
 
 @pytest.mark.parametrize("field", [
@@ -75,6 +115,7 @@ class FakeGitHub:
         self.review_comments = {}
         self.reviews = {}
         self.posted = []
+        self.patches = []
         self.pull = {"state": "open", "merged": False, "head": {"sha": "abc123"}}
         self.checks = {
             "check_runs": [
@@ -97,6 +138,9 @@ class FakeGitHub:
 
     async def list_pull_files(self, repo, number):
         return []
+
+    async def list_pull_file_patches(self, repo, number):
+        return self.patches
 
     async def get_commit_checks(self, repo, ref):
         return self.checks
@@ -150,6 +194,8 @@ class FakeDevin:
                 "expected_behavior": "Expected behavior", "observed_behavior": "Observed behavior",
                 "reproduction_steps": ["Run the reported scenario"],
                 "reproduction_evidence": ["Fake evidence"], "root_cause": "Fake root cause",
+                "current_behavior_intent": "BUG",
+                "intent_evidence": ["Checked tests, docs, and history."],
                 "verification_plan": ["Run the regression test"], "summary": "Fake investigation",
             }
         elif role == "remediator":
@@ -480,6 +526,160 @@ def _run_to_ci_checking(tmp_path, github=None, **settings_kwargs):
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
     return settings, github, store, devin, engine
+
+
+def _settled_remediator(tmp_path, patches=None, **settings_kwargs):
+    settings = _settings(tmp_path, **settings_kwargs)
+    github = FakeGitHub([_issue()])
+    github.patches = patches or []
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    workflow = store.upsert_workflow(
+        "owner/repo", 1, title="Bug", state=State.VERIFYING.value,
+    )
+    row = {
+        "session_id": "remediator-session",
+        "url": "https://app.devin.ai/remediator-session",
+        "attempts": 0,
+    }
+    store.record_session(
+        workflow_id=workflow["id"], role="remediator",
+        session_id=row["session_id"], url=row["url"],
+    )
+    settled = SettledSession(
+        row=row, workflow=workflow, output=_remediation(), kind="final",
+        fingerprint="fp", response={}, pulls=[],
+    )
+    return github, store, devin, engine, settled
+
+
+def _held_behavior_change(tmp_path, *, with_session=False, **settings_kwargs):
+    settings = _settings(tmp_path, learn_from_reviews=True, **settings_kwargs)
+    github = FakeGitHub([_issue()])
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    workflow = store.upsert_workflow(
+        "owner/repo", 1, title="Bug", state=State.BLOCKED.value,
+        needs_info_kind=NeedsInfoKind.BEHAVIOR_CHANGE.value,
+        pr_url="https://github.com/owner/repo/pull/4",
+        pr_number=4, waiting_since="2026-01-01T00:00:00+00:00",
+    )
+    if with_session:
+        store.record_session(
+            workflow_id=workflow["id"], role="remediator",
+            session_id="remediator-session", url="https://app.devin.ai/remediator-session",
+        )
+    return github, store, devin, engine, workflow
+
+
+def test_remediator_holds_pr_that_removes_existing_test_expectation(tmp_path):
+    github, store, _, engine, settled = _settled_remediator(
+        tmp_path,
+        patches=[{
+            "filename": "tests/test_existing.py",
+            "status": "modified",
+            "patch": "@@ -1 +1 @@\n-assert value == 0\n+assert value is None\n",
+        }],
+    )
+
+    asyncio.run(handle_remediator(engine, settled))
+
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.BLOCKED.value
+    assert workflow["needs_info_kind"] == NeedsInfoKind.BEHAVIOR_CHANGE.value
+    assert workflow["pr_number"] == 4
+    assert workflow["failure_reason"] == "fix changes existing test expectations"
+    assert any(
+        "assert value == 0" in body
+        for _, body in github.posted
+    )
+    assert any(e["kind"] == "behavior_change_held" for e in store.get_events(1))
+
+
+def test_remediator_allows_pr_with_only_added_tests(tmp_path):
+    _, store, _, engine, settled = _settled_remediator(
+        tmp_path,
+        patches=[{
+            "filename": "tests/test_new.py",
+            "status": "added",
+            "patch": "@@ -0,0 +1 @@\n+assert value == 1\n",
+        }],
+    )
+
+    asyncio.run(handle_remediator(engine, settled))
+
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.CI_CHECKING.value
+    assert workflow["needs_info_kind"] is None
+    assert not any(e["kind"] == "behavior_change_held" for e in store.get_events(1))
+
+
+def test_remediator_fails_open_when_patch_lookup_fails(tmp_path):
+    _, store, _, engine, settled = _settled_remediator(tmp_path)
+
+    async def fail_lookup(repo, number):
+        raise RuntimeError("GitHub unavailable")
+
+    engine.github.list_pull_file_patches = fail_lookup
+    asyncio.run(handle_remediator(engine, settled))
+
+    assert store.get_workflow("owner/repo", 1)["state"] == State.CI_CHECKING.value
+    assert any(
+        e["kind"] == "error" and "behavior-change gate: GitHub unavailable" in e["detail"]
+        for e in store.get_events(1)
+    )
+
+
+def test_behavior_change_approval_requires_trusted_reviewer(tmp_path):
+    github, store, devin, engine, _ = _held_behavior_change(tmp_path, with_session=True)
+    github.comments[1].append({
+        "id": 9, "body": "Approved", "user": {"login": "maintainer"},
+        "author_association": "OWNER",
+    })
+
+    asyncio.run(engine._replies())
+
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.CI_CHECKING.value
+    assert workflow["needs_info_kind"] is None
+    approvals = [e for e in store.get_events(1) if e["kind"] == "behavior_change_approved"]
+    assert len(approvals) == 1
+    assert json.loads(approvals[0]["detail"]) == {
+        "login": "maintainer", "comment_id": 9,
+    }
+    assert not devin.messages
+    assert any("Approved by @maintainer. Continuing to CI." in body for _, body in github.posted)
+
+
+def test_behavior_change_comment_from_untrusted_user_stays_blocked(tmp_path):
+    github, store, devin, engine, _ = _held_behavior_change(tmp_path, with_session=True)
+    github.comments[1].append({
+        "id": 9, "body": "Approved", "user": {"login": "outsider"},
+        "author_association": "NONE",
+    })
+
+    asyncio.run(engine._replies())
+
+    assert store.get_workflow("owner/repo", 1)["state"] == State.BLOCKED.value
+    assert not devin.messages
+    event = next(e for e in store.get_events(1)
+                 if e["kind"] == "human_comment_unforwarded")
+    assert json.loads(event["detail"]) == {
+        "comment_id": 9, "reason": "behaviour change needs a maintainer",
+    }
+
+
+def test_held_behavior_change_pr_merge_completes_workflow(tmp_path):
+    github, store, _, engine, _ = _held_behavior_change(tmp_path)
+    github.pull = {
+        "state": "closed", "merged": True, "head": {"sha": "abc123"},
+    }
+
+    asyncio.run(engine.tick())
+
+    assert store.get_workflow("owner/repo", 1)["state"] == State.COMPLETED.value
 
 
 def test_ready_for_review_requires_green_ci(tmp_path):
@@ -884,6 +1084,80 @@ def test_issue_number_from_url():
     assert issue_number_from_url("https://github.com/o/r/issues/42") == 42
     assert issue_number_from_url("https://github.com/o/r/pull/7") is None
     assert issue_number_from_url(None) is None
+
+
+def _settled_investigator(tmp_path, output):
+    settings = _settings(tmp_path)
+    github = FakeGitHub([_issue()])
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    workflow = store.upsert_workflow(
+        "owner/repo", 1, title="Bug", state=State.INVESTIGATING.value,
+    )
+    row = {
+        "session_id": "investigator-session",
+        "url": "https://app.devin.ai/investigator-session",
+        "attempts": 0,
+    }
+    devin.sessions[row["session_id"]] = {"session_id": row["session_id"]}
+    store.record_session(
+        workflow_id=workflow["id"], role="investigator",
+        session_id=row["session_id"], url=row["url"],
+    )
+    settled = SettledSession(
+        row=row, workflow=workflow, output=output, kind="final",
+        fingerprint="fp", response={}, pulls=[],
+    )
+    return github, store, devin, engine, settled
+
+
+def test_investigator_skips_deliberate_current_behavior(tmp_path):
+    output = _investigation()
+    output["current_behavior_intent"] = "DELIBERATE"
+    output["intent_evidence"] = [
+        "tests/test_existing.py asserts the current behavior",
+        "docs/behavior.md describes it as intentional",
+    ]
+    github, store, _, engine, settled = _settled_investigator(tmp_path, output)
+
+    asyncio.run(handle_investigator(engine, settled))
+
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.SKIPPED.value
+    assert workflow["needs_info_kind"] == SkipReason.INTENDED_BEHAVIOR.value
+    assert workflow["failure_reason"] == (
+        "current behaviour is deliberate: tests/test_existing.py asserts the current behavior"
+    )
+    assert "**Not a bug: current behaviour is deliberate**" in github.posted[-1][1]
+    assert "docs/behavior.md describes it as intentional" in github.posted[-1][1]
+
+
+def test_investigator_asks_when_behavior_intent_is_unclear(tmp_path):
+    output = _investigation()
+    output["current_behavior_intent"] = "UNCLEAR"
+    output["clarification_question"] = "Should empty groups be preserved?"
+    github, store, _, engine, settled = _settled_investigator(tmp_path, output)
+
+    asyncio.run(handle_investigator(engine, settled))
+
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.NEEDS_INFO.value
+    assert workflow["needs_info_kind"] == NeedsInfoKind.PRODUCT.value
+    assert workflow["waiting_since"]
+    assert "Should empty groups be preserved?" in github.posted[-1][1]
+
+
+def test_investigator_reasks_for_bug_intent_evidence(tmp_path):
+    output = _investigation()
+    output["intent_evidence"] = []
+    _, store, devin, engine, settled = _settled_investigator(tmp_path, output)
+
+    asyncio.run(handle_investigator(engine, settled))
+
+    assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
+    assert len(devin.messages) == 1
+    assert "intent_evidence must contain at least one item" in devin.messages[0][1]
 
 
 def test_analyst_empty_output_posts_no_comment(tmp_path):
