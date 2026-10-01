@@ -81,6 +81,8 @@ class Settings:
     # twice this long the workflow is escalated for a human. 0 = never.
     session_stall_seconds: float = float(os.getenv("SESSION_STALL_SECONDS", "5400"))
     analysis_enabled: bool = _env_bool("ANALYSIS_ENABLED", True)
+    # Save standing rules from trusted PR reviewers as Devin Knowledge notes.
+    learn_from_reviews: bool = _env_bool("LEARN_FROM_REVIEWS", True)
     analysis_label: str = os.getenv("ANALYSIS_LABEL", "devin-analysis")
     investigator_acu_limit: int = int(os.getenv("INVESTIGATOR_ACU_LIMIT", "10"))
     remediator_acu_limit: int = int(os.getenv("REMEDIATOR_ACU_LIMIT", "25"))

@@ -166,6 +166,7 @@ async def handle_remediator(engine: WorkflowEngine, s: SettledSession) -> None:
     row, workflow, out = s.row, s.workflow, s.output
     pr_url = out.get("pr_url") or pull_url(s.pulls)
     engine.store.set_state(workflow["id"], workflow["state"], remediation=out)
+    await engine.learn(workflow, out.get("learned_rules") or [])
     if not out:
         if s.kind == "waiting":
             reason = last_devin_message(s.response) or "Remediator is waiting for human input."

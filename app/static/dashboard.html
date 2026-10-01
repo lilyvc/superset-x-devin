@@ -22,6 +22,10 @@
     <h2>Issues</h2>
     <div class="worklist" id="worklist"></div>
   </section>
+  <section class="card">
+    <h2>Learned from reviews</h2>
+    <div id="learned"></div>
+  </section>
 
 </main>
 <script>
@@ -173,6 +177,9 @@ async function load(){
 
   ws.sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state)||b.issue_number-a.issue_number);
   $('#worklist').innerHTML=ws.map(rowHtml).join('')||'<div class="muted" style="padding:12px 6px">No issues discovered yet. Open an issue in the target repo and it will be picked up automatically.</div>';
+  const L=m.learned_rules||[];
+  $('#learned').innerHTML=L.length?`<ul class="ev">${L.map(r=>`<li>${esc(r.rule)} <span class="muted small">— from <a href="${esc(r.pr_url)}" target="_blank">#${esc(r.issue_number)} review ↗</a> · saved to Devin Knowledge</span></li>`).join('')}</ul>`
+    :'<div class="muted small">Nothing yet. When a maintainer states a standing rule in a PR review (e.g. "PRs must include a screenshot"), it is saved as Devin Knowledge and every future session follows it.</div>';
   $('#updated').textContent=new Date().toLocaleTimeString();
 }
 $('#worklist').addEventListener('click',e=>{

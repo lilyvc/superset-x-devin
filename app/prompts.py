@@ -249,9 +249,22 @@ REMEDIATION_SCHEMA = {
         "verification_passed": {"type": "boolean"},
         "blockers": {"type": "array", "items": {"type": "string"}},
         "summary": {"type": "string"},
+        "learned_rules": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Standing rules a reviewer stated for ALL future work in this repo "
+            "(not fixes specific to this PR), one imperative sentence each. Usually empty.",
+        },
     },
     "required": ["status", "verification_passed", "reproduction_rerun_passed", "summary"],
 }
+
+LEARN_RULES_NOTE = (
+    "This reviewer is a repository maintainer. If their feedback states a standing rule "
+    "for future work (e.g. \"PRs must include X\"), apply it here AND add it as one "
+    "sentence to `learned_rules` in your structured output; it will be saved as Devin "
+    "Knowledge for every future session."
+)
 
 REMEDIATOR_PROMPT = """You are the REMEDIATOR for an autonomous engineering remediation system
 working on the Apache Superset fork `{repo}`.

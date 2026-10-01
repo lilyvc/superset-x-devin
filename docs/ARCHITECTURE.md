@@ -40,7 +40,15 @@ Two deterministic gates sit between agents and progress:
 
 Every completed Retro analysis is stored on its workflow. New Investigator and Retro prompts include the repo's recent defect-family findings (`known_defects_block` in `app/prompts.py`), so recurring patterns are recognized instead of rediscovered. Retro-filed issues carry `DEVIN_DISCOVERED` provenance: they are triaged and fixed like any issue but never get a retro of their own — follow-ups cannot recurse.
 
-Deliberately kept local rather than moved into Devin Knowledge/Playbooks: the prompt + structured-output contract + Python gate is one auditable unit in this repo, and the knowledge that matters here is defect-family findings scoped to this target repo. Devin Knowledge/Playbooks could host long-lived org knowledge later — the contract layer should not move.
+## Learning from reviews
+
+Standing rules from maintainers become Devin Knowledge, which Devin recalls in every later session on the repo:
+
+1. A PR comment/review from an `OWNER`, `MEMBER`, or `COLLABORATOR` is forwarded with an extra instruction: if it states a rule for future work, apply it and add it to `learned_rules` in the structured output. Other commenters' feedback is applied to the PR but never saved, so outsiders can't plant instructions.
+2. When the Remediator reports `learned_rules`, the engine calls `POST /v3/organizations/{org_id}/knowledge/notes` (pinned to `TARGET_REPO`) once per new rule and records it in `learned_rules` + a `knowledge_learned` event.
+3. Rules show under "Learned from reviews" on the dashboard and on the issue page; edit or disable them in Devin under Settings → Knowledge. `LEARN_FROM_REVIEWS=false` turns this off.
+
+What lives where: maintainer rules → Devin Knowledge; the target repo's build/test onboarding → its `AGENTS.md`; the investigation/verification procedures (`skills/`), output schemas, and Python gates stay in this repo as one auditable contract.
 
 ## Replies and recovery
 
@@ -48,7 +56,7 @@ Issue comments and PR review comments/reviews are forwarded to the active sessio
 
 ## Persistence
 
-SQLite (`app/store.py`): `workflows` (state + structured outputs), `sessions` (role, ACUs, fingerprints), `events`, `deliveries` (webhook dedup), `issue_origins` (provenance). Session creation is `idempotent`; on restart the engine reconciles stored sessions before dispatching anything new — the pipeline is resumable at every point.
+SQLite (`app/store.py`): `workflows` (state + structured outputs), `sessions` (role, ACUs, fingerprints), `events`, `deliveries` (webhook dedup), `issue_origins` (provenance), `learned_rules` (Knowledge notes created from reviews). Session creation is `idempotent`; on restart the engine reconciles stored sessions before dispatching anything new — the pipeline is resumable at every point.
 
 ## Resilience
 

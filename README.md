@@ -14,9 +14,10 @@ A service that autonomously investigates incoming issues and fixes bugs in `TARG
 8. Once a fix PR exists, the Related Defect Analysis Devin searches for related defect patterns and files follow-up issues.
 9. The service marks a merged PR as `COMPLETED`. It asks a human for help when a workflow is `NEEDS_INFO` or `BLOCKED`.
 10. Comments on tracked issues and PRs reach the active Devin session — or resume it when it has finished.
+11. When a maintainer's PR review states a standing rule ("PRs must include X"), it is saved as a [Devin Knowledge](https://docs.devin.ai/product-guides/knowledge) note pinned to the repo, so every future session follows it.
 
 The service can also mark an issue `NOT_REPRODUCIBLE`, `SKIPPED`, `FAILED`, or `ESCALATED`.
-Each role runs as its own Devin session with a per-role agent mode and ACU cap (cheap modes for triage/dedup, `fusion` for remediation — see [Operations](docs/OPERATIONS.md)). Completed analyses feed back into new prompts as known defect families, so the system accumulates knowledge across issues.
+Each role runs as its own Devin session with a per-role agent mode and ACU cap (cheap modes for triage/dedup, `fusion` for remediation — see [Operations](docs/OPERATIONS.md)). The system gets better the more it is used: completed analyses feed back into new prompts as known defect families, and maintainer review rules become Devin Knowledge (listed under "Learned from reviews" on the dashboard; see [Architecture](docs/ARCHITECTURE.md#learning-from-reviews)).
 
 ## Quick start
 

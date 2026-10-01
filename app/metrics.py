@@ -111,6 +111,7 @@ def metrics(store, settings) -> dict:
     merged_clean = sum(bool(r.get("merged_without_changes")) for r in merged_prs)
     return {
         "counts": states, "groups": groups, "queue_depth": groups["backlog"],
+        "learned_rules": store.list_learned_rules(settings.target_repo),
         "executive": {
             "bugs_handled": len(rows),
             "verified_fixes": verified,
