@@ -60,12 +60,14 @@ async function load(){
     <div class="card" id="evidence"></div>`;
 
   // ---------- tracker ----------
-  const STEPS=[['Triaging',['DISCOVERED','TRIAGING']],['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],['Related defect analysis',[]]];
-  const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
+  const STEPS=[['Triaging',['DISCOVERED','TRIAGING']],['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],['Remediating',['REMEDIATING','VERIFYING']],['PR ready for review',['PR_OPENED','CI_CHECKING','READY_FOR_REVIEW','COMPLETED']],['Related defect analysis',[]]];
+  const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1};
   const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
-  const off=OFFTRACK[w.state];
+  const REACHED={READY_FOR_REVIEW:1,COMPLETED:1};
+  const stuckAt=()=>{const r=new Set((w.sessions||[]).map(s=>s.role));return w.pr_url?3:r.has('remediator')?2:r.has('investigator')?1:0};
+  const off=OFFTRACK[w.state]===undefined||SKIPLIKE[w.state]?OFFTRACK[w.state]:stuckAt();
   const cur=off===undefined?STEPS.findIndex(([,s])=>s.includes(w.state)):-1;
-  const anaDone=Object.keys(ana).length||ss.some(s=>s.role==='analyst');
+  const anaDone=Object.keys(ana).length;
   function note(i){
     if(i===0){
       if(w.state==='SKIPPED')return esc(tri.rationale||w.failure_reason||'skipped by triage');
@@ -83,10 +85,10 @@ async function load(){
     }
     if(i===2){
       if(rem.fix_summary||rem.summary)return esc(rem.fix_summary||rem.summary);
-      if(w.ci_status&&w.state==='CI_CHECKING')return 'waiting on CI: '+esc(w.ci_status);
       return '';
     }
     if(i===3){
+      if(w.state==='CI_CHECKING'||w.state==='PR_OPENED')return 'waiting on CI'+(w.ci_status?': '+esc(w.ci_status):'');
       if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
       return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
     }
@@ -98,12 +100,12 @@ async function load(){
   }
   $('#steps').innerHTML=STEPS.map(([label,st],i)=>{
     let cls='',mark='';
-    if(i===4){cls='retro pre-retro';if(anaDone){cls+=' done';mark='✓'}}
+    if(i===4){cls='retro pre-retro';if(anaDone){cls+=' done';mark='✓'}else if(ss.some(s=>s.role==='analyst'&&s.active))cls+=' now';}
     else if(off!==undefined){
       if(i<off){cls='done';mark='✓'}
       else if(i===off){cls=SKIPLIKE[w.state]?'skip':'bad';mark=SKIPLIKE[w.state]?'–':'✗'}
     }else{
-      if(i<cur||w.state==='COMPLETED'){cls='done';mark='✓'}
+      if(i<cur||(i===cur&&REACHED[w.state])){cls='done';mark='✓'}
       else if(i===cur){cls='now'}
     }
     const role=['triage','investigator','remediator',null,'analyst'][i];

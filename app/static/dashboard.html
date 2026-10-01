@@ -66,17 +66,18 @@ function prBadge(w){
   else{icon='◌';cls='pending';label='CI '+(w.ci_status||'pending')}
   return `<a class="prst ${cls}" href="${esc(w.pr_url)}" target="_blank" onclick="event.stopPropagation()" title="PR #${n} · ${label}">${icon} PR #${n}</a>`;
 }
-// Five-step lifecycle; reproduction folds into Investigating, verification and
-// CI fold into Remediating, and the last dashed step is defect-family analysis.
+// Five-step lifecycle; reproduction folds into Investigating, verification into
+// Remediating, CI into the PR step, and the last dashed step is defect-family analysis.
 const STEPS=[
   ['Triaging',['DISCOVERED','TRIAGING']],
   ['Investigating',['QUEUED','INVESTIGATING','NEEDS_INFO','REPRODUCED','ROOT_CAUSE_FOUND']],
-  ['Remediating',['REMEDIATING','VERIFYING','PR_OPENED','CI_CHECKING']],
-  ['PR ready for review',['READY_FOR_REVIEW','COMPLETED']],
+  ['Remediating',['REMEDIATING','VERIFYING']],
+  ['PR ready for review',['PR_OPENED','CI_CHECKING','READY_FOR_REVIEW','COMPLETED']],
   ['Related defect analysis',[]],
 ];
-const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
+const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:1,ESCALATED:1};
 const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
+const REACHED={READY_FOR_REVIEW:1,COMPLETED:1};
 function stepNote(w,i){
   const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
   if(i===0){
@@ -95,10 +96,10 @@ function stepNote(w,i){
   }
   if(i===2){
     if(rem.fix_summary||rem.summary)return esc(rem.fix_summary||rem.summary);
-    if(w.ci_status&&w.state==='CI_CHECKING')return 'waiting on CI: '+esc(w.ci_status);
     return '';
   }
   if(i===3){
+    if(w.state==='CI_CHECKING'||w.state==='PR_OPENED')return 'waiting on CI'+(w.ci_status?': '+esc(w.ci_status):'');
     if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
     return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
   }
@@ -118,7 +119,8 @@ function sessLink(ss,role){
 }
 function stepsHtml(w){
   const reached=new Set(w.reached||[]);reached.add(w.state);
-  const off=OFFTRACK[w.state];
+  const stuckAt=()=>{const r=new Set((w.sessions||[]).map(s=>s.role));return w.pr_url?3:r.has('remediator')?2:r.has('investigator')?1:0};
+  const off=OFFTRACK[w.state]===undefined||SKIPLIKE[w.state]?OFFTRACK[w.state]:stuckAt();
   let cur=-1;
   if(off===undefined)cur=STEPS.findIndex(([,ss])=>ss.includes(w.state));
   const anaDone=Object.keys(w.analysis||{}).length;
@@ -127,11 +129,12 @@ function stepsHtml(w){
     let cls='',mark='';
     if(i===4){
       cls='retro';if(anaDone){cls+=' done';mark='✓'}
+      else if(ss.some(s=>s.role==='analyst'&&s.active))cls+=' now';
     }else if(off!==undefined){
       if(i<off){cls='done';mark='✓'}
       else if(i===off){if(SKIPLIKE[w.state]){cls='skip';mark='–'}else{cls='bad';mark='✗'}}
     }else{
-      const done=i<cur||(cur!==-1&&w.state==='COMPLETED');
+      const done=i<cur||(i===cur&&REACHED[w.state]);
       if(done){cls='done';mark='✓'}
       else if(i===cur){cls='now'}
     }

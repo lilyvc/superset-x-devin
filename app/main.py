@@ -108,6 +108,7 @@ def _session_url(s: dict) -> str:
 def _session_summary(store, workflow_id):
     return [{"id": s["session_id"], "url": _session_url(s), "role": s["role"],
              "status": s.get("devin_status"), "acus": s.get("acus"),
+             "active": bool(s.get("active")),
              "created_at": s.get("created_at"), "finished_at": s.get("finished_at")}
             for s in store.get_sessions(workflow_id)]
 
