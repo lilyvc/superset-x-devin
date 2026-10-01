@@ -17,6 +17,11 @@ class GitHubClient:
             timeout=30.0,
         )
 
+    async def get_repo(self, repo: str) -> dict:
+        resp = await self._client.get(f"/repos/{repo}")
+        resp.raise_for_status()
+        return resp.json()
+
     async def list_open_issues(self, repo: str, per_page: int = 100) -> list[dict]:
         issues: list[dict] = []
         for page in range(1, 101):

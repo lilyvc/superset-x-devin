@@ -17,6 +17,7 @@ from .devin_client import DevinClient
 from .github_client import GitHubClient
 from .metrics import metrics
 from .poller import run_poller
+from .preflight import check_setup
 from .prompts import validate_skills
 from .states import Role, State
 from .store import Store
@@ -34,15 +35,16 @@ async def lifespan(app: FastAPI):
     validate_skills()
     store = Store(settings.db_path)
     github = GitHubClient(settings.github_token, settings.github_api_url)
-    if not settings.devin_org_id:
-        logger.warning(
-            "DEVIN_ORG_ID is unset — using the legacy v1 sessions API. "
-            "Set DEVIN_ORG_ID for the production v3 path."
-        )
-    devin = DevinClient(settings.devin_api_key,
-                        settings.devin_api_base_url, settings.devin_org_id)
+    devin = DevinClient(
+        settings.devin_api_key,
+        settings.devin_api_base_url,
+        settings.devin_org_id,
+    )
     engine = WorkflowEngine(settings, store, github, devin)
     app.state.engine, app.state.store = engine, store
+    app.state.setup_problems = await check_setup(settings, github, devin)
+    for problem in app.state.setup_problems:
+        logger.error("%s", problem)
     poller_task = None
     if settings.enable_polling:
         await engine.tick()
@@ -79,8 +81,14 @@ def verify_signature(secret: str, body: bytes, signature_header: str | None) -> 
 
 
 @app.get("/healthz")
-async def healthz():
-    return {"ok": True, "target_repo": settings.target_repo}
+async def healthz(request: Request):
+    engine = request.app.state.engine
+    problems = request.app.state.setup_problems or engine.tick_errors
+    return {
+        "ok": not problems,
+        "target_repo": settings.target_repo,
+        "problems": problems,
+    }
 
 
 def _require_admin(request: Request) -> None:

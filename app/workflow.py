@@ -42,6 +42,7 @@ logger = logging.getLogger("workflow")
 class WorkflowEngine:
     def __init__(self, settings: Settings, store: Store, github: GitHubClient, devin):
         self.settings, self.store, self.github, self.devin = settings, store, github, devin
+        self.tick_errors: list[str] = []
         self._startup_baseline: int | None = None
         self._budget_event_sent = False
         # Serialized here so no two ticks can interleave dispatches, regardless
@@ -53,33 +54,44 @@ class WorkflowEngine:
             await self._tick()
 
     async def _tick(self) -> None:
+        self.tick_errors = []
         issues = []
         try:
             issues = await self.github.list_open_issues(self.settings.target_repo)
             await self._discover(issues)
         except Exception as exc:
             logger.exception("discovery failed")
-            self.store.add_event(None, "error", detail=f"discovery: {exc}")
+            error = f"discovery: {exc}"
+            self.tick_errors.append(error)
+            self.store.add_event(None, "error", detail=error)
         try:
             await self._reconcile_sessions()
         except Exception as exc:
             logger.exception("session reconciliation failed")
-            self.store.add_event(None, "error", detail=f"reconcile: {exc}")
+            error = f"reconcile: {exc}"
+            self.tick_errors.append(error)
+            self.store.add_event(None, "error", detail=error)
         try:
             await self._reconcile_prs()
         except Exception as exc:
             logger.exception("pull request reconciliation failed")
-            self.store.add_event(None, "error", detail=f"pull requests: {exc}")
+            error = f"pull requests: {exc}"
+            self.tick_errors.append(error)
+            self.store.add_event(None, "error", detail=error)
         try:
             await self._replies()
         except Exception as exc:
             logger.exception("reply forwarding failed")
-            self.store.add_event(None, "error", detail=f"replies: {exc}")
+            error = f"replies: {exc}"
+            self.tick_errors.append(error)
+            self.store.add_event(None, "error", detail=error)
         try:
             await self._dispatch()
         except Exception as exc:
             logger.exception("dispatch failed")
-            self.store.add_event(None, "error", detail=f"dispatch: {exc}")
+            error = f"dispatch: {exc}"
+            self.tick_errors.append(error)
+            self.store.add_event(None, "error", detail=error)
 
     def _admit(self, issue: dict) -> tuple[dict, str | None]:
         provenance = self.store.get_issue_origin(

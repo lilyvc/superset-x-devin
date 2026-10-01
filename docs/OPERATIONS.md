@@ -2,16 +2,15 @@
 
 ## Requirements
 
-Use a persistent host that can run Docker Compose or Python 3.
+Use a persistent host that can run Docker Compose or Python 3.10+.
 Give the service a GitHub token, a Devin credential, and a stable SQLite path.
 
 ## Docker Compose
 
 1. Copy `.env.example` to `.env`.
-2. Set `TARGET_REPO`, `GITHUB_TOKEN`, and `ADMIN_TOKEN` in `.env`.
-3. Choose a Devin credential for live operation.
-4. Run `docker compose up --build`.
-5. Keep the host running while polling is enabled.
+2. Set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`, and `ADMIN_TOKEN` in `.env`.
+3. Run `docker compose up --build`.
+4. Keep the host running while polling is enabled.
 
 Compose starts the `orchestrator` service on port `8000`.
 It stores the database at `/data/orchestrator.db` in the persistent `orchestrator-data` volume.
@@ -49,7 +48,7 @@ Keep the host and service running for polling to continue.
 Use a fine-grained personal access token with these repository permissions:
 
 - Issues: read and write.
-- Pull requests: read.
+- Pull requests: read and write.
 - Checks: read.
 - Commit statuses: read.
 
@@ -61,7 +60,7 @@ Protect the token as a production credential.
 ### Devin credential
 
 Production runs use the v3 API: set `DEVIN_API_KEY` to a **service-user key** (recommended for a running service — Devin guidance reserves PATs for scripts acting as a human user) and `DEVIN_ORG_ID` to the Devin organization that owns the sessions. A PAT also works on v3 but sessions then run as that user.
-Leaving `DEVIN_ORG_ID` unset falls back to the legacy v1 service-user API (a startup warning is logged).
+Leaving `DEVIN_ORG_ID` unset falls back to the legacy v1 service-user API; the dashboard shows a Setup problem banner.
 Set `DEVIN_API_BASE_URL` only when the API base URL differs from its default.
 
 ## Security configuration
@@ -89,7 +88,7 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `ADMIN_TOKEN` | empty | Bearer token for `POST /admin/poll-now` |
 | `DEVIN_API_KEY` | empty | Devin service-user key (production) or PAT (human scripts) |
 | `DEVIN_API_BASE_URL` | `https://api.devin.ai` | Devin API base URL |
-| `DEVIN_ORG_ID` | empty | Required for production — selects the org-scoped v3 API; empty = legacy v1 |
+| `DEVIN_ORG_ID` | required | Devin organization id (`org-…`); required for the org-scoped v3 API |
 | `MAX_ACU_LIMIT` | unset | Optional ACU cap for each Devin session |
 | `ELIGIBILITY_LABEL` | empty | Optional label required for issue intake |
 | `MAX_NEW_ISSUES_PER_POLL` | `5` | Maximum newly discovered issues admitted per poll |
@@ -128,16 +127,19 @@ An empty value leaves an optional limit unset.
 
 ## Tests
 
-Run the test suite from the repository root:
+Run the tests and lint from the repository root, as CI does:
 
 ```bash
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
+.venv/bin/ruff check app tests
 ```
 
 ## Troubleshooting
 
 | Symptom | Cause and action |
 |---|---|
+| Dashboard shows a red Setup problem banner | Fix the listed setting in `.env` and restart |
 | `POST /admin/poll-now` returns `503` | Set `ADMIN_TOKEN`, then restart the service |
 | `POST /admin/poll-now` returns `401` | Send the exact bearer token from `ADMIN_TOKEN` |
 | `POST /webhooks/github` returns `503` | Set `GITHUB_WEBHOOK_SECRET`, or use polling |
