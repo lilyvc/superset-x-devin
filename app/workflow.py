@@ -1,6 +1,7 @@
 """Deterministic, restart-safe multi-stage workflow engine."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import ClassVar
@@ -42,7 +43,6 @@ class WorkflowEngine:
     def __init__(self, settings: Settings, store: Store, github: GitHubClient, devin):
         self.settings, self.store, self.github, self.devin = settings, store, github, devin
         self._startup_baseline: int | None = None
-        self._github_login: str | None = None
         self._budget_event_sent = False
         # Serialized here so no two ticks can interleave dispatches, regardless
         # of whether the caller remembered to hold an external lock.
@@ -419,12 +419,6 @@ class WorkflowEngine:
             )
 
     async def _replies(self):
-        if self._github_login is None:
-            try:
-                self._github_login = (await self.github.get_authenticated_user()).get("login")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("could not fetch authenticated GitHub user: %s", exc)
-                self._github_login = ""
         for workflow in self.store.list_workflows():
             if workflow["state"] not in (
                 {s.value for s in
@@ -440,6 +434,7 @@ class WorkflowEngine:
             }
             if not session and not waiting:
                 continue
+            own_ids = self._own_comment_ids(workflow["id"])
             comments = await self.github.list_issue_comments(workflow["repo"], workflow["issue_number"])
             last_id = workflow.get("last_comment_id") or 0
             for comment in sorted(comments, key=lambda c: c.get("id", 0)):
@@ -448,7 +443,8 @@ class WorkflowEngine:
                 last_id = comment["id"]
                 user = comment.get("user") or {}
                 login = user.get("login", "")
-                if user.get("type") == "Bot" or login.endswith("[bot]") or login == self._github_login:
+                if (user.get("type") == "Bot" or login.endswith("[bot]")
+                        or comment.get("id") in own_ids):
                     continue
                 if session:
                     await self.devin.send_message(
@@ -487,6 +483,23 @@ class WorkflowEngine:
                 self.store.set_state(workflow["id"], current["state"], last_comment_id=last_id)
         await self._pr_replies()
 
+    def _own_comment_ids(self, workflow_id: int) -> set[int]:
+        own_ids = set()
+        for event in self.store.get_events(workflow_id):
+            if event["kind"] != "comment_posted":
+                continue
+            try:
+                detail = json.loads(event["detail"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            comment_id = detail.get("comment_id") if isinstance(detail, dict) else None
+            if comment_id is not None:
+                try:
+                    own_ids.add(int(comment_id))
+                except (TypeError, ValueError):
+                    continue
+        return own_ids
+
     _PR_REPLY_STATES: ClassVar[set[str]] = {
         State.REMEDIATING.value, State.VERIFYING.value, State.PR_OPENED.value,
         State.CI_CHECKING.value, State.READY_FOR_REVIEW.value,
@@ -503,6 +516,7 @@ class WorkflowEngine:
         for workflow in self.store.list_workflows():
             if workflow["state"] not in self._PR_REPLY_STATES or not workflow.get("pr_number"):
                 continue
+            own_ids = self._own_comment_ids(workflow["id"])
             repo, pr = workflow["repo"], workflow["pr_number"]
             reviews = await self.github.list_pull_reviews(repo, pr)
             sources = [
@@ -522,7 +536,7 @@ class WorkflowEngine:
                     user = comment.get("user") or {}
                     login = user.get("login", "")
                     if (user.get("type") == "Bot" or login.endswith("[bot]")
-                            or login == self._github_login):
+                            or comment.get("id") in own_ids):
                         continue
                     await self._forward_pr_comment(workflow, comment, login, kind)
                 current = self.store.get_workflow_by_id(workflow["id"])

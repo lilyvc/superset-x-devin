@@ -112,7 +112,10 @@ class FakeGitHub:
 
     async def post_issue_comment(self, repo, number, body):
         self.posted.append((number, body))
-        return {"id": len(self.posted), "user": {"type": "Bot"}}
+        comment = {"id": len(self.posted), "body": body,
+                   "user": {"login": "automation"}}
+        self.comments.setdefault(number, []).append(comment)
+        return comment
 
     async def get_authenticated_user(self):
         return {"login": "automation"}
@@ -589,6 +592,26 @@ def test_blocked_reply_resumes_finished_session(tmp_path):
     assert "human_comment_unforwarded" not in kinds
 
 
+def test_issue_reply_by_automation_resumes_blocked_workflow(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session = store.get_sessions(1)[0]
+    store.update_session(session["session_id"], active=0)
+    store.set_state(1, State.BLOCKED, failure_reason="waiting on environment info",
+                    waiting_since="2026-01-01T00:00:00+00:00")
+    github.comments[1].append({"id": 9, "body": "It's Postgres 16",
+                               "user": {"login": "automation"}})
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.INVESTIGATING.value
+    assert any(e["kind"] == "human_reply_resumed_session"
+               for e in store.get_events(1))
+
+
 def test_pr_comment_resumes_finished_remediator(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
@@ -660,6 +683,27 @@ def test_pr_review_body_and_bot_filtering(tmp_path):
     events = [e for e in store.get_events(1)
               if e["kind"].startswith("pr_comment_")]
     assert len(events) == 1
+
+
+def test_service_comment_is_not_forwarded_as_human_reply(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    asyncio.run(engine.comment(workflow, "service status"))
+    posted_comment = github.comments[1][-1]
+    comment_event = next(e for e in store.get_events(1)
+                         if e["kind"] == "comment_posted")
+    assert json.loads(comment_event["detail"])["comment_id"] == posted_comment["id"]
+
+    asyncio.run(engine.tick())
+
+    assert not any(e["kind"] == "human_reply_forwarded"
+                   for e in store.get_events(1))
+    assert not any("service status" in message for _, message in devin.messages)
 
 
 def test_blocked_reply_recovers_with_fresh_session(tmp_path):
@@ -1028,6 +1072,38 @@ def test_maintainer_review_rule_becomes_knowledge(tmp_path):
     assert "learned_rules" in devin.messages[-1][1]
     assert len(devin.notes) == 1
     assert devin.notes[0]["pinned_repo"] == "owner/repo"
+    assert [r["rule"] for r in store.list_learned_rules("owner/repo")] == [
+        "PRs must include a before/after screenshot."]
+    assert any(e["kind"] == "knowledge_learned" for e in store.get_events(1))
+
+
+def test_owner_pr_conversation_comment_by_automation_becomes_knowledge(tmp_path):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    for _ in range(3):
+        asyncio.run(engine.tick())
+    store.set_state(1, State.READY_FOR_REVIEW, pr_number=5,
+                    pr_url="https://github.com/owner/repo/pull/5")
+    github.comments[5] = [
+        {"id": 7, "body": "PRs must include a before/after screenshot.",
+         "author_association": "OWNER", "user": {"login": "automation"}},
+    ]
+
+    asyncio.run(engine._replies())
+
+    assert "learned_rules" in devin.messages[-1][1]
+    remediator = next(s for s in store.get_sessions(1) if s["role"] == "remediator")
+    response = devin.sessions[remediator["session_id"]]
+    response["structured_output"] = {
+        **response["structured_output"],
+        "learned_rules": ["PRs must include a before/after screenshot."],
+    }
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+
     assert [r["rule"] for r in store.list_learned_rules("owner/repo")] == [
         "PRs must include a before/after screenshot."]
     assert any(e["kind"] == "knowledge_learned" for e in store.get_events(1))
