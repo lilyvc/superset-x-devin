@@ -77,6 +77,7 @@ const STEPS=[
 ];
 const OFFTRACK={SKIPPED:0,NOT_REPRODUCIBLE:1,BLOCKED:1,FAILED:2,ESCALATED:2};
 const SKIPLIKE={SKIPPED:1,NOT_REPRODUCIBLE:1};
+const REACHED={READY_FOR_REVIEW:1,COMPLETED:1};
 function stepNote(w,i){
   const tri=w.triage||{},inv=w.investigation||{},rem=w.remediation||{},ana=w.analysis||{};
   if(i===0){
@@ -127,11 +128,12 @@ function stepsHtml(w){
     let cls='',mark='';
     if(i===4){
       cls='retro';if(anaDone){cls+=' done';mark='✓'}
+      else if(ss.some(s=>s.role==='analyst'&&s.active))cls+=' now';
     }else if(off!==undefined){
       if(i<off){cls='done';mark='✓'}
       else if(i===off){if(SKIPLIKE[w.state]){cls='skip';mark='–'}else{cls='bad';mark='✗'}}
     }else{
-      const done=i<cur||(cur!==-1&&w.state==='COMPLETED');
+      const done=i<cur||(i===cur&&REACHED[w.state]);
       if(done){cls='done';mark='✓'}
       else if(i===cur){cls='now'}
     }
