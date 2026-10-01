@@ -46,6 +46,34 @@ The service polls `TARGET_REPO` every 5 seconds by default, so it works anywhere
 
 See [Operations](docs/OPERATIONS.md) for the full configuration reference.
 
+## Try it: run the workflow on a sample bug
+
+There is no simulated mode. Each step runs a real Devin session, so set `MAX_TOTAL_ACUS` in `.env` if you want a spending cap.
+
+1. Start the service as above, with `TARGET_REPO` set to your Superset fork.
+2. File this issue in the fork. The bug is real on `apache/superset` master.
+
+   > **Title:** Time-comparison "percentage" returns inf when the baseline value is 0
+   >
+   > `superset/utils/pandas_postprocessing/compare.py` divides `(s_df - c_df) / c_df` with no zero guard. With compare type `percentage` or `ratio`, a baseline of 0 produces `inf`: chart cells show blank and CSV exports contain `inf`.
+   >
+   > ```python
+   > import pandas as pd
+   > from superset.utils.pandas_postprocessing.compare import compare
+   > df = pd.DataFrame({"y": [100.0, 0.0, 2.0], "z": [0.0, 0.0, 4.0]})
+   > compare(df, source_columns=["y"], compare_columns=["z"], compare_type="percentage")
+   > # percentage column: [inf, nan, -0.5]; expected NaN where the baseline is 0
+   > ```
+
+3. Watch the issue move through the dashboard tracker. Each step links to its Devin session, and the service posts the same updates as comments on the issue.
+   - **Triaging**: a cheap session decides whether the issue is an actionable bug.
+   - **Investigating**: the Investigator reproduces the bug on master and finds the root cause.
+   - **Remediating**: the Remediator writes a fix and regression tests that fail before the fix and pass after it.
+   - **PR ready for review**: the fix PR is open and its CI is green.
+   - **Related defect analysis**: the Analyst looks for the same pattern elsewhere and files follow-up issues. On this bug our run found the same unguarded division in `contribution.py`, and that follow-up issue went through the same steps.
+4. Comment on the issue or the PR to steer the active session. A maintainer review comment that states a rule (for example "PRs must list affected chart types") appears under **Learned from reviews**.
+5. Merge the PR. The workflow is marked completed.
+
 ## Documentation
 
 | Document | Description |
