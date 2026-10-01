@@ -129,7 +129,8 @@ async def list_workflows(request: Request):
                                         "parent_issue_number", "failure_reason",
                                         "needs_info_kind", "triage", "investigation",
                                         "remediation", "analysis",
-                                        "merged_without_changes")}
+                                        "merged_without_changes", "ci_fix_pr_url",
+                                        "ci_fix_pr_merged")}
         if row["state"] in {"NEEDS_INFO", "BLOCKED"} and row.get("waiting_since"):
             item["waiting_for_seconds"] = (now - datetime.fromisoformat(row["waiting_since"])).total_seconds()
         else:

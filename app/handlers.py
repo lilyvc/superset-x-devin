@@ -194,11 +194,25 @@ async def handle_remediator(engine: WorkflowEngine, s: SettledSession) -> None:
     if ok:
         pr_number = pr_number_from_url(pr_url)
         now = utcnow()
+        updated = bool(workflow.get("pr_url")) and workflow.get("pr_url") == pr_url
+        triage = out.get("ci_triage") or {}
+        ci_fix_pr = triage.get("ci_fix_pr_url") if triage.get("cause") == "unrelated" else None
+        extra = {}
+        if ci_fix_pr and ci_fix_pr != workflow.get("ci_fix_pr_url"):
+            extra = {"ci_fix_pr_url": ci_fix_pr, "ci_fix_pr_merged": 0}
         engine.store.set_state(workflow["id"], State.PR_OPENED, remediation=out,
-                               pr_url=pr_url, pr_number=pr_number, pr_opened_at=now)
+                               pr_url=pr_url, pr_number=pr_number, pr_opened_at=now, **extra)
         tests = "\n".join(f"- {t.get('command', '')}" for t in out.get("tests_executed", []))
         evidence = "\n".join(f"- {x}" for x in out.get("verification_evidence", []))
-        if engine.settings.ci_required:
+        if engine.settings.ci_required and updated:
+            engine.store.set_state(workflow["id"], State.CI_CHECKING)
+            previous = workflow.get("remediation")
+            previous = previous.get("ci_triage") if isinstance(previous, dict) else None
+            if triage and triage != previous:
+                await engine.comment(workflow, _ci_triage_comment(triage, pr_url, ci_fix_pr))
+            else:
+                await engine.comment(workflow, f"**Fix PR updated:** {pr_url}")
+        elif engine.settings.ci_required:
             engine.store.set_state(workflow["id"], State.CI_CHECKING, ci_status="pending")
             await engine.comment(
                 workflow,
@@ -233,6 +247,19 @@ async def handle_remediator(engine: WorkflowEngine, s: SettledSession) -> None:
                                failure_reason="; ".join(reasons))
         await engine.comment(workflow, "**Fix verification failed**\n\n" + "; ".join(reasons))
         _finish(engine, s)
+
+
+def _ci_triage_comment(triage: dict, pr_url: str, ci_fix_pr: str | None) -> str:
+    evidence = triage.get("evidence") or ""
+    if triage.get("cause") == "caused_by_fix":
+        return (f"**CI failure was caused by the fix** — Devin pushed a follow-up to "
+                f"{pr_url}.\n\n{evidence}")
+    if ci_fix_pr:
+        return (f"**CI failure is unrelated to the fix** — {evidence}\n\n"
+                f"Devin opened {ci_fix_pr} to fix CI. Once a maintainer merges it, "
+                f"Devin updates {pr_url} so CI re-runs.")
+    return (f"**CI failure is unrelated to the fix** — {evidence}\n\n"
+            "_No CI fix PR was opened; a maintainer needs to look._")
 
 
 async def handle_analyst(engine: WorkflowEngine, s: SettledSession) -> None:

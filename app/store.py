@@ -120,6 +120,13 @@ class Store:
                 "last_pr_comment_id": "INTEGER DEFAULT 0",
                 "last_pr_review_comment_id": "INTEGER DEFAULT 0",
                 "last_pr_review_id": "INTEGER DEFAULT 0",
+                # CI-failure handoff: last failing head sha handed to the
+                # Remediator, how many were handed off, and the separate
+                # CI-fix PR it opened when the failure was unrelated.
+                "ci_failed_sha": "TEXT",
+                "ci_fix_attempts": "INTEGER DEFAULT 0",
+                "ci_fix_pr_url": "TEXT",
+                "ci_fix_pr_merged": "INTEGER DEFAULT 0",
             })
 
     @staticmethod

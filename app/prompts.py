@@ -255,6 +255,17 @@ REMEDIATION_SCHEMA = {
             "description": "Standing rules a reviewer stated for ALL future work in this repo "
             "(not fixes specific to this PR), one imperative sentence each. Usually empty.",
         },
+        "ci_triage": {
+            "type": ["object", "null"],
+            "description": "Set only after being told CI failed on your PR.",
+            "properties": {
+                "cause": {"type": "string", "description": "caused_by_fix | unrelated"},
+                "evidence": {"type": "string",
+                             "description": "Which test failed and why, from the job log."},
+                "ci_fix_pr_url": {"type": ["string", "null"],
+                                  "description": "Separate PR fixing an unrelated CI failure."},
+            },
+        },
     },
     "required": ["status", "verification_passed", "reproduction_rerun_passed", "summary"],
 }
@@ -264,6 +275,26 @@ LEARN_RULES_NOTE = (
     "for future work (e.g. \"PRs must include X\"), apply it here AND add it as one "
     "sentence to `learned_rules` in your structured output; it will be saved as Devin "
     "Knowledge for every future session."
+)
+
+def ci_failure_note(pr_url: str | None, failing: list[str]) -> str:
+    checks = "\n".join(f"- {c}" for c in failing[:10]) or "- (see the PR's checks tab)"
+    return (
+        f"Required CI checks are failing on your fix PR {pr_url}:\n{checks}\n\n"
+        "Read the failing job logs and decide whether your change caused the failure.\n"
+        "- Caused by your change: fix it on the same PR branch and push.\n"
+        "- Not caused by your change (a broken or flaky test, or CI already red on the "
+        "base branch): do NOT edit, skip or weaken tests in the fix PR. Open a separate, "
+        "minimal PR against the base branch that fixes the CI problem, and do not merge "
+        "it yourself.\n"
+        "Then update your structured output: keep `pr_url` as the fix PR and set "
+        "`ci_triage` = {cause: caused_by_fix | unrelated, evidence, ci_fix_pr_url}."
+    )
+
+
+CI_FIX_MERGED_NOTE = (
+    "The CI fix PR {ci_fix_pr_url} was merged. Merge the base branch into your fix PR's "
+    "branch (no force-push) and push so CI re-runs on {pr_url}."
 )
 
 REMEDIATOR_PROMPT = """You are the REMEDIATOR for an autonomous engineering remediation system

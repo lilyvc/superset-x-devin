@@ -106,6 +106,7 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `DEDUP_ACU_LIMIT` | `3` | ACU cap for a Dedup session |
 | `CI_REQUIRED` | `true` | Requires GitHub checks before `READY_FOR_REVIEW` |
 | `CI_TIMEOUT_SECONDS` | `14400` | Records a timeout after this CI wait |
+| `MAX_CI_FIX_ATTEMPTS` | `2` | Failing head commits handed back to the Remediator before a human is asked; `0` disables the handoff |
 | `SESSION_STALL_SECONDS` | `5400` | Nudges a stalled session; escalation occurs at twice this value |
 | `ANALYSIS_ENABLED` | `true` | Starts a Retro Devin session once a fix PR exists |
 | `LEARN_FROM_REVIEWS` | `true` | Saves standing rules from maintainer PR reviews as Devin Knowledge notes (needs the v3 API and Knowledge write permission) |
@@ -145,3 +146,4 @@ Run the test suite from the repository root:
 | Polling stops | Keep the container and its host running |
 | The service loses workflow state | Keep `DB_PATH` on persistent storage |
 | CI remains pending | Check the PR head commit's GitHub check runs and commit statuses |
+| CI fails for a reason unrelated to the fix | The Remediator opens a separate CI-fix PR (linked on the tracker); merge it and the fix PR is updated automatically |

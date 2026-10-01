@@ -10,7 +10,7 @@ A service that autonomously investigates incoming issues and fixes bugs in `TARG
 4. Python checks the evidence and checks open PRs for an existing fix.
 5. The Remediator prepares a fix and reports test results.
 6. Python checks the Remediator's evidence and the PR's GitHub CI results.
-7. The workflow reaches `READY_FOR_REVIEW` when required checks pass.
+7. The workflow reaches `READY_FOR_REVIEW` when required checks pass. If CI fails, the Remediator reads the logs: it fixes its own breakage, or opens a separate CI-fix PR when the failure isn't caused by the fix, then updates the fix PR once that merges.
 8. Once a fix PR exists, the Related Defect Analysis Devin searches for related defect patterns and files follow-up issues.
 9. The service marks a merged PR as `COMPLETED`. It asks a human for help when a workflow is `NEEDS_INFO` or `BLOCKED`.
 10. Comments on tracked issues and PRs reach the active Devin session — or resume it when it has finished.

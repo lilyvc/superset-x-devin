@@ -77,6 +77,10 @@ class Settings:
     # After this long in CI_CHECKING a one-time ci_timeout event is recorded so
     # a stalled pipeline is visible on the issue timeline. 0 = never.
     ci_timeout_seconds: float = float(os.getenv("CI_TIMEOUT_SECONDS", "14400"))
+    # Failing CI is handed back to the Remediator to triage (fix it, or open a
+    # separate CI-fix PR when the failure is unrelated). After this many
+    # failing head commits the workflow waits for a human. 0 = never hand off.
+    max_ci_fix_attempts: int = int(os.getenv("MAX_CI_FIX_ATTEMPTS", "2"))
     # Watchdog for Devin sessions that never settle: after this long an active
     # session is nudged once to finish and emit its structured output, and at
     # twice this long the workflow is escalated for a human. 0 = never.
