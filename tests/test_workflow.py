@@ -217,6 +217,31 @@ def test_state_machine_restart_safe(tmp_path):
     assert len(store.get_sessions(1)) == count
 
 
+def test_comment_failure_does_not_rewind_state(tmp_path):
+    issue = {"number": 1, "title": "Bug", "body": "body",
+             "html_url": "https://github.com/owner/repo/issues/1",
+             "user": {"login": "reporter"}, "labels": []}
+    settings = _settings(tmp_path)
+    github = FakeGitHub([issue])
+
+    async def forbidden(repo, number, body):
+        raise RuntimeError("403 Resource not accessible by personal access token")
+
+    github.post_issue_comment = forbidden
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.REMEDIATING.value
+    remediator = store.get_sessions(1, active_only=True)[0]
+    assert remediator["role"] == "remediator"
+    devin.sessions[remediator["session_id"]]["status"] = "running"
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.REMEDIATING.value
+    assert any(e["kind"] == "comment_failed" for e in store.get_events(1))
+
+
 def test_needs_info_reply_resumes_investigator(tmp_path):
     issue = {"number": 1, "title": "Bug", "body": "body",
              "html_url": "https://github.com/owner/repo/issues/1",
