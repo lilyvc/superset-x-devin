@@ -47,7 +47,6 @@ See [Operations](docs/OPERATIONS.md) for the full configuration reference.
 |---|---|
 | [Architecture](docs/ARCHITECTURE.md) | Components, workflow rules, gates, and data |
 | [Operations](docs/OPERATIONS.md) | Setup, configuration, credentials, and troubleshooting |
-| [Plan](docs/PLAN.md) | Implemented work, follow-ups, non-goals, and risks |
 
 ## Project layout
 
@@ -70,7 +69,6 @@ app/
 docs/
   ARCHITECTURE.md
   OPERATIONS.md
-  PLAN.md
 skills/
 tests/
 Dockerfile
