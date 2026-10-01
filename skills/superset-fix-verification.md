@@ -7,6 +7,8 @@
    confirm it FAILS for the right reason.
 3. **Implement the smallest fix** at the root cause. Do not touch unrelated
    code, formatting, or dependencies.
+3a. Do not change or delete existing test assertions. If the fix truly requires
+    it, say so in the PR body under "Behaviour change".
 4. **Run the regression test** — must pass now.
 5. **Run targeted existing tests** for the touched module(s)
    (e.g. `pytest tests/unit_tests/<area>/`, `npm run test -- <path>` in

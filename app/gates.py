@@ -1,5 +1,6 @@
 """Python-owned decision gates. Devin supplies evidence; these decide."""
 
+import re
 from datetime import datetime
 
 from .config import Settings
@@ -18,6 +19,8 @@ def investigation_gate(out: dict) -> tuple[bool, list[str]]:
         "observed_behavior": "non-empty",
         "reproduction_steps": "at least one item",
         "reproduction_evidence": "at least one item",
+        "current_behavior_intent": "BUG",
+        "intent_evidence": "at least one item",
         "root_cause": "non-empty",
         "verification_plan": "at least one item",
     }
@@ -31,6 +34,8 @@ def investigation_gate(out: dict) -> tuple[bool, list[str]]:
             reasons.append(f"{key} must be true")
         elif expected == "REPRODUCED" and value != expected:
             reasons.append("status must be REPRODUCED")
+        elif expected == "BUG" and value != expected:
+            reasons.append("current_behavior_intent must be BUG")
     return not reasons, reasons
 
 
@@ -50,6 +55,43 @@ def verification_gate(out: dict, pr_url: str | None) -> tuple[bool, list[str]]:
     if not pr_url:
         reasons.append("pr_url is required")
     return not reasons, reasons
+
+
+def changed_test_expectations(files: list[dict]) -> list[str]:
+    expectations = []
+    test_suffixes = (
+        ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+        ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+    )
+    for file in files:
+        if file.get("status") == "added":
+            continue
+        filename = str(file.get("filename") or "")
+        basename = filename.rsplit("/", 1)[-1]
+        directories = filename.split("/")[:-1]
+        is_test = (
+            any(directory in {"tests", "__tests__"} for directory in directories)
+            or (basename.startswith("test_") and basename.endswith(".py"))
+            or (basename.endswith("_test.py"))
+            or basename.endswith(test_suffixes)
+        )
+        if not is_test:
+            continue
+        for diff_line in (file.get("patch") or "").splitlines():
+            if not diff_line.startswith("-") or diff_line.startswith("---"):
+                continue
+            line = diff_line[1:].strip()
+            if (
+                not line
+                or line.startswith(("#", "//", "import "))
+                or (
+                    line.startswith("from ")
+                    and re.search(r"\s+import(?:\s|$)", line)
+                )
+            ):
+                continue
+            expectations.append(f"{filename}: {line}")
+    return expectations
 
 
 def ci_verdict(data: dict) -> tuple[str, list[str]]:

@@ -36,6 +36,12 @@ Two deterministic gates sit between agents and progress:
 - **Dedup gate** — scans open PRs for a closing reference (→ `SKIPPED`), then sends ambiguous candidates to a cheap Dedup session; `PROCEED` clears it.
 - **CI gate** — `READY_FOR_REVIEW` only when the PR head commit's GitHub checks exist and none are pending/failing. No checks = `unverified`, not a pass. A failing head commit is handed back to the Remediator once (up to `MAX_CI_FIX_ATTEMPTS` commits): it fixes the PR if its change caused the failure, otherwise it opens a separate CI-fix PR and records `ci_triage`; when a maintainer merges that PR the engine asks the Remediator to update the fix branch so CI re-runs.
 
+## Bug vs behaviour change
+
+The Investigator checks tests, docs, and history to decide whether reproduced behavior is a bug, deliberate, or a product choice.
+The Remediator's PR is held if its patch removes non-comment, non-import lines from existing test files.
+Only an owner, member, or collaborator can approve the hold; merged and closed PRs are still reconciled.
+
 ## Knowledge loop and provenance
 
 Every completed Retro analysis is stored on its workflow. New Investigator and Retro prompts include the repo's recent defect-family findings (`known_defects_block` in `app/prompts.py`), so recurring patterns are recognized instead of rediscovered. Retro-filed issues carry `DEVIN_DISCOVERED` provenance: they are triaged and fixed like any issue but never get a retro of their own — follow-ups cannot recurse.

@@ -75,6 +75,27 @@ class GitHubClient:
                 break
         return files
 
+    async def list_pull_file_patches(self, repo: str, pull_number: int) -> list[dict]:
+        files = []
+        for page in range(1, 101):
+            resp = await self._client.get(
+                f"/repos/{repo}/pulls/{pull_number}/files",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            files.extend(
+                {
+                    "filename": file.get("filename", ""),
+                    "status": file.get("status", ""),
+                    "patch": file.get("patch") or "",
+                }
+                for file in batch
+            )
+            if len(batch) < 100:
+                break
+        return files
+
     async def get_commit_checks(self, repo: str, ref: str) -> dict:
         """Check runs + legacy combined commit status for a ref (e.g. PR head sha)."""
         runs_resp = await self._client.get(

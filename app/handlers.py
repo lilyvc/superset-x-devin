@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .devin_status import last_devin_message
-from .gates import investigation_gate, verification_gate
+from .gates import changed_test_expectations, investigation_gate, verification_gate
 from .parsing import issue_number_from_url, pr_number_from_url, pull_url
 from .prompts import clarification_comment, skip_comment
-from .states import Origin, Role, SkipReason, State
+from .states import NeedsInfoKind, Origin, Role, SkipReason, State
 from .store import utcnow
 
 if TYPE_CHECKING:
     from .workflow import WorkflowEngine
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,43 @@ async def handle_investigator(engine: WorkflowEngine, s: SettledSession) -> None
         await engine.comment(workflow, f"**Investigation blocked**\n\n{reason}")
         _acknowledge(engine, s)
         return
+    if kind == "REPRODUCED" and out.get("current_behavior_intent") == "DELIBERATE":
+        evidence = out.get("intent_evidence") or []
+        summary = evidence[0] if evidence else "No intent evidence was provided."
+        engine.store.set_state(
+            workflow["id"], State.SKIPPED,
+            needs_info_kind=SkipReason.INTENDED_BEHAVIOR.value,
+            failure_reason="current behaviour is deliberate: " + summary,
+            completed_at=utcnow(), investigation=out,
+        )
+        evidence_list = "\n".join(
+            f"- {item}" for item in (evidence or ["No intent evidence was provided."])
+        )
+        await engine.comment(
+            workflow,
+            f"**Not a bug: current behaviour is deliberate** "
+            f"([investigation]({row.get('url', '')}))\n\n"
+            f"{out.get('summary', '')}\n\n**Intent evidence:**\n{evidence_list}",
+        )
+        _finish(engine, s)
+        return
+    if kind == "REPRODUCED" and out.get("current_behavior_intent") == "UNCLEAR":
+        expected = out.get("expected_behavior") or "<expected_behavior>"
+        observed = out.get("observed_behavior") or "<observed_behavior>"
+        question = out.get("clarification_question") or (
+            f"Is the current behaviour intended? {expected} vs {observed}"
+        )
+        engine.store.set_state(
+            workflow["id"], State.NEEDS_INFO,
+            needs_info_kind=NeedsInfoKind.PRODUCT.value,
+            waiting_since=utcnow(), investigation=out,
+        )
+        await engine.comment(
+            workflow,
+            clarification_comment(question, NeedsInfoKind.PRODUCT.value, row.get("url", "")),
+        )
+        _acknowledge(engine, s)
+        return
     ok, reasons = investigation_gate(out)
     if not ok:
         attempts = int(row.get("attempts") or 0)
@@ -193,6 +233,46 @@ async def handle_remediator(engine: WorkflowEngine, s: SettledSession) -> None:
     ok, reasons = verification_gate(out, pr_url)
     if ok:
         pr_number = pr_number_from_url(pr_url)
+        approved = any(
+            event["kind"] == "behavior_change_approved"
+            for event in engine.store.get_events(workflow["id"])
+        )
+        if not approved:
+            try:
+                changed = changed_test_expectations(
+                    await engine.github.list_pull_file_patches(workflow["repo"], pr_number)
+                )
+            except Exception as exc:
+                logger.exception("could not inspect test changes in PR #%s", pr_number)
+                engine.store.add_event(
+                    workflow["id"], "error",
+                    detail=f"behavior-change gate: {exc}",
+                )
+                changed = []
+            if changed:
+                now = utcnow()
+                engine.store.set_state(
+                    workflow["id"], State.BLOCKED,
+                    pr_url=pr_url, pr_number=pr_number, pr_opened_at=now,
+                    remediation=out,
+                    needs_info_kind=NeedsInfoKind.BEHAVIOR_CHANGE.value,
+                    failure_reason="fix changes existing test expectations",
+                    waiting_since=now,
+                )
+                engine.store.add_event(
+                    workflow["id"], "behavior_change_held", detail=changed,
+                )
+                lines = "\n".join(changed[:10])
+                await engine.comment(
+                    workflow,
+                    "**Maintainer decision needed: this fix changes existing behaviour**\n\n"
+                    f"{pr_url}\n\n```text\n{lines}\n```\n\n"
+                    "_Existing tests asserted the old behaviour, so this may be a product "
+                    "change rather than a bug fix. A maintainer (owner/member/collaborator) "
+                    "can reply here to approve it, or close the PR._",
+                )
+                _finish(engine, s)
+                return
         now = utcnow()
         updated = bool(workflow.get("pr_url")) and workflow.get("pr_url") == pr_url
         triage = out.get("ci_triage") or {}

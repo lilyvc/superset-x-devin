@@ -59,6 +59,7 @@ class NeedsInfoKind(str, Enum):
     PRODUCT = "NEEDS_PRODUCT_INPUT"
     DESIGN = "NEEDS_DESIGN_INPUT"
     ENVIRONMENT = "NEEDS_ENVIRONMENT_INFO"
+    BEHAVIOR_CHANGE = "NEEDS_BEHAVIOR_APPROVAL"
 
 
 # Where a tracked issue came from: opened by a human reporter vs filed by the
@@ -76,6 +77,7 @@ class SkipReason(str, Enum):
     FEATURE_REQUEST = "FEATURE_REQUEST"
     UNSUITABLE = "UNSUITABLE"
     FILTERED = "FILTERED"
+    INTENDED_BEHAVIOR = "INTENDED_BEHAVIOR"
 
 
 # Funnel stages, in order, for the dashboard. Each maps to the set of states
