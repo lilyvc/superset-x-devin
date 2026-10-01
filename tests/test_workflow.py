@@ -727,6 +727,35 @@ def test_ci_not_required_goes_straight_to_review(tmp_path):
     assert workflow["ci_status"] == "skipped"
 
 
+def test_disabling_ci_after_restart_releases_unverified_pr(tmp_path):
+    github = FakeGitHub([_issue()])
+    github.checks = {"check_runs": [], "statuses": []}
+    _, _, store, devin, _ = _run_to_ci_checking(tmp_path, github=github)
+    assert store.get_workflow("owner/repo", 1)["state"] == State.CI_CHECKING.value
+
+    settings = _settings(tmp_path, ci_required=False)
+    restarted_store = Store(settings.db_path)
+    restarted = WorkflowEngine(settings, restarted_store, github, devin)
+    asyncio.run(restarted.tick())
+    asyncio.run(restarted.tick())
+
+    workflow = restarted_store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.READY_FOR_REVIEW.value
+    assert workflow["ci_status"] == "skipped"
+    events = restarted_store.get_events(workflow["id"])
+    assert len([event for event in events if event["kind"] == "ci_skipped"]) == 1
+    assert len([body for _, body in github.posted if "CI_REQUIRED=false" in body]) == 1
+
+
+def test_disabling_ci_does_not_release_behavior_change_hold(tmp_path):
+    _, store, _, engine, _ = _held_behavior_change(tmp_path, ci_required=False)
+
+    asyncio.run(engine.tick())
+
+    assert store.get_workflow("owner/repo", 1)["state"] == State.BLOCKED.value
+    assert not any(event["kind"] == "ci_skipped" for event in store.get_events(1))
+
+
 def test_dedup_skips_when_pr_already_links_issue(tmp_path):
     pulls = [{"number": 7, "title": "fix: aggregate NULL groups",
               "body": "## Related issue\nFixes #1",

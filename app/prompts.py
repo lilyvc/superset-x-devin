@@ -68,8 +68,8 @@ TRIAGE_SCHEMA = {
         },
         "suspected_area": {
             "type": "string",
-            "description": "Best guess at the affected area of Superset (e.g. explore, SQL Lab, "
-            "dashboard filters, db_engine_specs/bigquery). One short phrase.",
+            "description": "Best guess at the affected component or module in the repository. "
+            "One short phrase.",
         },
         "rationale": {"type": "string", "description": "2-4 sentences justifying the verdict."},
     },
@@ -77,7 +77,7 @@ TRIAGE_SCHEMA = {
 }
 
 TRIAGE_PROMPT = """You are the TRIAGE step of an autonomous engineering remediation system for the
-Apache Superset fork `{repo}`. You are the cheap gate in front of expensive work.
+repository `{repo}`. You are the cheap gate in front of expensive work.
 
 Decide ONLY whether this issue is worth a full investigation. Spend as little
 effort as possible: read the issue and its comments, and at most do a quick
@@ -99,7 +99,7 @@ URL: {url}
 - ACTIONABLE — a concrete defect/regression in this codebase with enough
   information that an engineer could start reproducing it now.
 - NEEDS_INFO — plausibly a real defect, but essential information is missing
-  (version, steps, which chart/filter, expected behavior). Put ONE concise,
+  (version, steps, affected component, expected behavior). Put ONE concise,
   answerable question in clarification_question and set needs_info_kind.
   Never invent the missing details.
 - SKIP — not engineering work for this system: a support question, a feature
@@ -180,7 +180,7 @@ INVESTIGATION_SCHEMA = {
 }
 
 INVESTIGATOR_PROMPT = """You are the INVESTIGATOR for an autonomous engineering remediation system
-working on the Apache Superset fork `{repo}`.
+working on the repository `{repo}`.
 
 Your job is to understand a bug BEFORE anyone writes a fix. You do NOT modify
 source code, create branches, or open PRs. You may write throwaway scripts or
@@ -211,7 +211,7 @@ next. Fill it truthfully:
 - status = NEEDS_INFO if the report is ambiguous or the expected behavior is
   a product decision you cannot infer. Put ONE concise, answerable question in
   clarification_question and set needs_info_kind. Never invent requirements.
-- status = NOT_REPRODUCIBLE if you followed the steps on current master and
+- status = NOT_REPRODUCIBLE if you followed the steps on the current default branch and
   the behavior is correct; say what you tried in observed_behavior.
 - status = BLOCKED if an environment problem prevents you (say what).
 - verification_plan must be concrete enough that a different engineer could
@@ -312,7 +312,7 @@ CI_FIX_MERGED_NOTE = (
 )
 
 REMEDIATOR_PROMPT = """You are the REMEDIATOR for an autonomous engineering remediation system
-working on the Apache Superset fork `{repo}`.
+working on the repository `{repo}`.
 
 An Investigator has already reproduced this bug and identified a root cause.
 Your job: implement the smallest correct fix, add regression coverage, verify
@@ -388,7 +388,7 @@ DEDUP_SCHEMA = {
 }
 
 DEDUP_PROMPT = """You are the DEDUP gate of an autonomous engineering remediation system for the
-Apache Superset fork `{repo}`.
+repository `{repo}`.
 
 An Investigator has already reproduced issue #{number} and identified its root
 cause. Before the system spends a remediation session, decide whether an
@@ -405,8 +405,8 @@ Affected components: {affected_components}
 {candidates}
 
 ## Task
-- Read each candidate PR (title, body, linked issues, diff) — the repo and PRs
-  are public. Decide if any of them already fixes THIS root cause, not merely
+- Read each candidate PR (title, body, linked issues, diff) using the repository's
+  configured access. Decide if any of them already fixes THIS root cause, not merely
   a related symptom.
 - DUPLICATE — an open PR already addresses the same root cause in ALL of the
   affected components named above. Set duplicate_pr_url to it.
@@ -451,7 +451,7 @@ ANALYSIS_SCHEMA = {
 }
 
 ANALYST_PROMPT = """You are the ENGINEERING ANALYST for an autonomous engineering remediation
-system working on the Apache Superset fork `{repo}`.
+system working on the repository `{repo}`.
 
 A bug has been reproduced and its root cause identified. A separate session is
 implementing the fix — do NOT fix the bug yourself and do NOT modify code.
@@ -472,8 +472,8 @@ Observed: {observed_behavior}
 1. Does the same problematic code pattern exist elsewhere in the codebase?
    Search deliberately (grep/semantic) and list concrete locations.
 2. Could other user-facing flows share this failure mode?
-3. Are there related open or historical GitHub issues in `{repo}` or upstream
-   apache/superset with the same symptom?
+3. Are there related open or historical GitHub issues in `{repo}` or its upstream
+   project, if any, with the same symptom?
 4. What engineering practice allowed this to escape: missing regression test,
    missing validation, missing invariant/abstraction/type contract, missing
    automated check?

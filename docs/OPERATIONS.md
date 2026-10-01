@@ -4,11 +4,14 @@
 
 Use a persistent host that can run Docker Compose or Python 3.10+.
 Give the service a GitHub token, a Devin credential, and a stable SQLite path.
+The target repo must be connected to Devin with permission to push branches and
+open PRs, plus an environment that can run its tests. Sessions use that repo's
+`AGENTS.md`, README, and contribution guide.
 
 ## Docker Compose
 
 1. Copy `.env.example` to `.env`.
-2. Set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`, and `ADMIN_TOKEN` in `.env`.
+2. Set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, and `DEVIN_ORG_ID` in `.env`. `ADMIN_TOKEN` is optional and enables admin endpoints.
 3. Run `docker compose up --build`.
 4. Keep the host running while polling is enabled.
 
@@ -40,6 +43,9 @@ Polling is on by default (`ENABLE_POLLING=true`) and runs every `GITHUB_POLL_INT
 The service runs one tick at startup and repeats a tick at the configured interval.
 Set `POLL_BACKLOG=false` to baseline existing issues at startup instead of processing them.
 Keep the host and service running for polling to continue.
+Keep `ENABLE_POLLING=true` with webhooks too: background ticks reconcile Devin
+sessions, comments, and CI. Disabling it requires an external scheduler calling
+`POST /admin/poll-now` regularly with `ADMIN_TOKEN`.
 
 ## Credentials
 
@@ -62,6 +68,28 @@ Protect the token as a production credential.
 Production runs use the v3 API: set `DEVIN_API_KEY` to a **service-user key** (recommended for a running service — Devin guidance reserves PATs for scripts acting as a human user) and `DEVIN_ORG_ID` to the Devin organization that owns the sessions. A PAT also works on v3 but sessions then run as that user.
 Leaving `DEVIN_ORG_ID` unset falls back to the legacy v1 service-user API; the dashboard shows a Setup problem banner.
 Set `DEVIN_API_BASE_URL` only when the API base URL differs from its default.
+
+The service-user role needs `UseDevinSessions`, `ViewOrgSessions`, and
+`ManageOrgSessions` for creating, reading, messaging, and terminating sessions.
+Review learning also needs organization Knowledge write access
+(`ManageOrgKnowledge`). See the [permission reference](https://docs.devin.ai/api-reference/v3/overview).
+Set `LEARN_FROM_REVIEWS=false` if Knowledge writes are unavailable.
+
+If your organization cannot use the default `lite` or `fusion` modes, set
+`TRIAGE_DEVIN_MODE=normal`, `DEDUP_DEVIN_MODE=normal`, and
+`REMEDIATOR_DEVIN_MODE=normal`, or leave these values empty to use its default.
+
+## First-run checks
+
+`GET /healthz` reports startup credential checks, whether GitHub can read the
+target repo, and whether Issues are enabled. It does not test write permissions
+or whether Devin can build and test the target code. Fix reported problems and
+restart after changing `.env`.
+
+For one trial issue, set `ELIGIBILITY_LABEL=devin-test` and apply that label to
+the issue. Include a reproducible failure on the target repo's default branch.
+If the repo has no GitHub CI, set `CI_REQUIRED=false` before starting; otherwise
+no checks means `unverified`, so the PR stays in `CI_CHECKING`.
 
 ## Security configuration
 
@@ -118,7 +146,7 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `REMEDIATOR_DEVIN_MODE` | `fusion` | Agent mode for a Remediator session |
 | `ANALYST_DEVIN_MODE` | empty | Agent mode for a Retro Devin session |
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose uses `/data/orchestrator.db` |
-| `ENABLE_POLLING` | `true` | Starts periodic GitHub polling |
+| `ENABLE_POLLING` | `true` | Background workflow ticks; keep enabled with webhooks unless an external scheduler supplies ticks |
 | `GITHUB_POLL_INTERVAL_SECONDS` | `5` | Delay between polling ticks |
 | `POLL_BACKLOG` | `true` | Processes open issues that existed at startup |
 
@@ -145,7 +173,11 @@ Run the tests and lint from the repository root, as CI does:
 | `POST /webhooks/github` returns `503` | Set `GITHUB_WEBHOOK_SECRET`, or use polling |
 | `POST /webhooks/github` returns `401` | Check the GitHub webhook secret and signature |
 | No issue enters the workflow | Check intake labels, issue types, age, and `POLL_BACKLOG` |
+| Session creation is rejected | Check the service-user role, available ACUs, and configured Devin modes |
+| Status comments are missing | Check GitHub token write permissions and `comment_failed` events |
+| A review rule is not saved | Check Knowledge write access and `knowledge_failed` events |
 | Polling stops | Keep the container and its host running |
 | The service loses workflow state | Keep `DB_PATH` on persistent storage |
 | CI remains pending | Check the PR head commit's GitHub check runs and commit statuses |
+| CI is unverified | The repo has no checks; configure CI or set `CI_REQUIRED=false` and restart |
 | CI fails for a reason unrelated to the fix | The Remediator opens a separate CI-fix PR (linked on the tracker); merge it and the fix PR is updated automatically |
