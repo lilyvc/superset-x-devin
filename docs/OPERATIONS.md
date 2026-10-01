@@ -127,11 +127,12 @@ An empty value leaves an optional limit unset.
 
 ## Tests
 
-Run the test suite from the repository root:
+Run the tests and lint from the repository root, as CI does:
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
+.venv/bin/ruff check app tests
 ```
 
 ## Troubleshooting

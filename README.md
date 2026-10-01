@@ -28,10 +28,13 @@ Each role runs as its own Devin session with a per-role agent mode and ACU cap (
 
 ## Start the service
 
-1. Copy `.env.example` to `.env`.
-2. Set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`, and `ADMIN_TOKEN` in `.env`.
-3. Run `docker compose up --build`.
-4. Open `http://localhost:8000`. A red **Setup problem** banner lists any misconfigured settings. File an issue in the target repo to watch the workflow.
+You need Docker with Compose v2 (`docker compose`).
+
+1. Clone this repo and `cd` into it.
+2. Copy `.env.example` to `.env`.
+3. Set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`, and `ADMIN_TOKEN` in `.env`.
+4. Run `docker compose up --build`.
+5. Open `http://localhost:8000`. A red **Setup problem** banner lists any misconfigured settings. File an issue in the target repo to watch the workflow.
 
 Open issues are processed at startup too. Set `POLL_BACKLOG=false` to process only new issues.
 For a local run without Docker, see [Operations](docs/OPERATIONS.md).
@@ -39,6 +42,7 @@ For a local run without Docker, see [Operations](docs/OPERATIONS.md).
 To force an immediate poll instead of waiting for the interval:
 
 ```bash
+set -a; . ./.env; set +a
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
 ```
 
@@ -48,7 +52,7 @@ See [Operations](docs/OPERATIONS.md) for the full configuration reference.
 
 ## Try it: run the workflow on a sample bug
 
-There is no simulated mode. Each step runs a real Devin session, so set `MAX_TOTAL_ACUS` in `.env` if you want a spending cap.
+There is no simulated mode. Each step runs a real Devin session, so set `MAX_TOTAL_ACUS` in `.env` to stop new sessions once that many ACUs are used. Sessions already running finish under their own per-role caps.
 
 1. Start the service as above, with `TARGET_REPO` set to your Superset fork.
 2. File this issue in the fork. The bug is real on `apache/superset` master.
