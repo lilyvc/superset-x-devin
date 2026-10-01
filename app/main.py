@@ -104,11 +104,14 @@ async def poll_now(request: Request):
 
 
 @app.post("/admin/workflows/{repo_owner}/{repo}/{number}/redispatch")
-async def redispatch(repo_owner: str, repo: str, number: int, request: Request):
+async def redispatch(repo_owner: str, repo: str, number: int, request: Request,
+                     force: bool = False, note: str = ""):
     """Operator override: send a dedup- or intake-skipped workflow back into
-    remediation. Clears prior dedup verdicts so the gate re-runs, and returns
-    the workflow to ROOT_CAUSE_FOUND so the next tick dispatches a fresh
-    dedup check then a remediator.
+    remediation. Default: clears prior dedup verdicts and returns the workflow
+    to ROOT_CAUSE_FOUND so the next tick re-runs dedup then remediation.
+    With ?force=true, the dedup gate is bypassed entirely — a remediator is
+    dispatched immediately, with `note` passed to it as operator context (use
+    it to scope the fix, e.g. "PR #X already covers component Y — fix only Z").
     """
     _require_admin(request)
     store = request.app.state.store
@@ -129,6 +132,19 @@ async def redispatch(repo_owner: str, repo: str, number: int, request: Request):
     store.set_state(workflow["id"], State.ROOT_CAUSE_FOUND,
                     needs_info_kind=None, failure_reason=None,
                     completed_at=None, waiting_since=None)
+    if force:
+        context = ("An operator has overridden the dedup skip and ordered "
+                   "remediation anyway.")
+        if note:
+            context += f"\nOperator note: {note}"
+        session = await request.app.state.engine._create_role_session(
+            workflow, Role.REMEDIATOR, extra_context=context)
+        store.add_event(workflow["id"], "manual_remediation_dispatch",
+                        detail={"note": note or None,
+                                "dedup_sessions_cleared": removed})
+        return {"workflow_id": workflow["id"], "state": State.REMEDIATING.value,
+                "forced": True, "dedup_sessions_cleared": removed,
+                "session_id": (session or {}).get("session_id")}
     store.add_event(workflow["id"], "manual_redispatch",
                     detail=f"operator redispatch; cleared {removed} dedup session(s)")
     # tick() serializes itself internally — no external lock needed.
