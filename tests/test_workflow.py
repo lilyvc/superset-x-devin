@@ -1063,3 +1063,24 @@ def test_v3_list_sessions_paginates_and_filters_by_tags():
     adopted = asyncio.run(client.adopt_session(["repo:x", "issue:1"]))
     assert adopted["session_id"] == "devin-3"
     asyncio.run(client.aclose())
+
+
+def test_session_waiting_on_human_frees_its_slot(tmp_path):
+    settings = _settings(tmp_path, max_concurrent_devins=1)
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue(1), _issue(2)]), devin)
+    asyncio.run(engine.tick())
+    first = store.get_workflow("owner/repo", 1)
+    second = store.get_workflow("owner/repo", 2)
+    assert not store.get_sessions(second["id"])
+    session = store.get_sessions(first["id"])[0]
+    devin.sessions[session["session_id"]].update(
+        status="suspended", status_detail="waiting_for_user", structured_output={},
+        messages=[{"type": "devin_message", "message": "Which database?"}],
+    )
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.NEEDS_INFO.value
+    assert store.get_sessions(first["id"], active_only=True)
+    assert store.count_running_sessions() == 1
+    assert store.get_sessions(second["id"], active_only=True)

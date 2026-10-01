@@ -165,7 +165,7 @@ async function load(){
   $('#k-open').textContent=e.issues_open??'–';
   $('#k-open-sub').textContent=`${e.in_progress||0} active · ${e.awaiting_human||0} waiting`;
   $('#k-sess').textContent=m.active_sessions??'–';
-  $('#k-sess-sub').textContent=`of ${m.max_concurrent||0} max`;
+  $('#k-sess-sub').textContent=`of ${m.max_concurrent||0} max`+(m.waiting_sessions?` · ${m.waiting_sessions} parked on a human`:'');
   $('#k-attn').textContent=(e.awaiting_input||0)+(e.awaiting_review||0);
   $('#k-attn-sub').textContent=`${e.awaiting_input||0} clarification · ${e.awaiting_review||0} review`+(e.awaiting_blocked?` · ${e.awaiting_blocked} blocked`:'');
   $('#k-fix').textContent=e.verified_fixes??'–';

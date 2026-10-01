@@ -29,7 +29,7 @@ Each `WorkflowEngine.tick` runs five steps in order: discover issues → reconci
 | Retro Devin (`analyst`) | org default | Maps the defect family, files follow-up issues | none — advisory; follow-ups enter as normal issues |
 
 Dispatch order per tick: Remediator → Retro Devin → Investigator → Triage.
-`MAX_CONCURRENT_DEVINS` caps parallel sessions; `MAX_TOTAL_ACUS` stops dispatch at the budget; `SESSION_STALL_SECONDS` nudges then escalates stuck sessions. Per-role ACU caps and agent modes are in `docs/OPERATIONS.md`.
+`MAX_CONCURRENT_DEVINS` caps running sessions (one parked on a human reply frees its slot); `MAX_TOTAL_ACUS` stops dispatch at the budget; `SESSION_STALL_SECONDS` nudges then escalates stuck sessions. Per-role ACU caps and agent modes are in `docs/OPERATIONS.md`.
 
 Two deterministic gates sit between agents and progress:
 

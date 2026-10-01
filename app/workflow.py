@@ -627,7 +627,7 @@ class WorkflowEngine:
                            "no new Devin sessions will be dispatched.",
                 )
             return
-        capacity = max(0, self.settings.max_concurrent_devins - self.store.count_active_sessions())
+        capacity = max(0, self.settings.max_concurrent_devins - self.store.count_running_sessions())
         if not capacity:
             return
         workflows = self.store.list_workflows()
