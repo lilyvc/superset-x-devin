@@ -1,7 +1,6 @@
 # superset-x-devin: GitHub issue-to-fix service
 
-An external service that autonomously fixes issues in `TARGET_REPO` using Devin sessions. Devin triages, reproduces, and remediates issues, then opens PRs for human review. A dashboard tracks every issue's progress, cost, and evidence.
-The service stores its state outside the target repository. It does not install an application or agent there.
+A service that autonomously investigates incoming issues and fixes bugs in `TARGET_REPO` using Devin sessions. Devin triages, reproduces, and remediates issues, then opens PRs for human review. When appropriate a follow up agent loks for similar defects elsewhere in the repo or deeper route causes. A dashboard tracks every issue's progress, Devin sessions, and evidence.
 
 ## How it works
 
@@ -12,7 +11,7 @@ The service stores its state outside the target repository. It does not install 
 5. The Remediator prepares a fix and reports test results.
 6. Python checks the Remediator's evidence and the PR's GitHub CI results.
 7. The workflow reaches `READY_FOR_REVIEW` when required checks pass.
-8. Once a fix PR exists, the Retro Devin searches for related defect patterns and files follow-up issues.
+8. Once a fix PR exists, the Related Defect Analysis Devin searches for related defect patterns and files follow-up issues.
 9. The service marks a merged PR as `COMPLETED`. It asks a human for help when a workflow is `NEEDS_INFO` or `BLOCKED`.
 10. Comments on tracked issues and PRs reach the active Devin session — or resume it when it has finished.
 
@@ -38,7 +37,7 @@ To force an immediate poll instead of waiting for the interval:
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
 ```
 
-The service polls `TARGET_REPO` every 5 seconds by default, so it works anywhere Docker runs — no public URL needed. It also supports GitHub webhooks (`POST /webhooks/github` for `issues`, `issue_comment`, `pull_request_review`, and `pull_request_review_comment` events, verified with `GITHUB_WEBHOOK_SECRET`) for instant delivery in production where the service is publicly reachable. For a local demo, polling is the simpler choice — the service just sweeps the repo every few seconds.
+The service polls `TARGET_REPO` every 5 seconds by default, so it works anywhere Docker runs. It also supports GitHub webhooks (`POST /webhooks/github` for `issues`, `issue_comment`, `pull_request_review`, and `pull_request_review_comment` events, verified with `GITHUB_WEBHOOK_SECRET`) for instant delivery in production where the service is publicly reachable. For a local demo, polling is the simpler choice.
 
 See [Operations](docs/OPERATIONS.md) for the full configuration reference.
 
