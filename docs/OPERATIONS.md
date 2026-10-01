@@ -108,6 +108,7 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `CI_TIMEOUT_SECONDS` | `14400` | Records a timeout after this CI wait |
 | `SESSION_STALL_SECONDS` | `5400` | Nudges a stalled session; escalation occurs at twice this value |
 | `ANALYSIS_ENABLED` | `true` | Starts a Retro Devin session once a fix PR exists |
+| `LEARN_FROM_REVIEWS` | `true` | Saves standing rules from maintainer PR reviews as Devin Knowledge notes (needs the v3 API and Knowledge write permission) |
 | `INVESTIGATOR_ACU_LIMIT` | `10` | ACU cap for an Investigator session |
 | `REMEDIATOR_ACU_LIMIT` | `25` | ACU cap for a Remediator session |
 | `ANALYST_ACU_LIMIT` | `8` | ACU cap for a Retro Devin session |

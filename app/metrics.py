@@ -112,6 +112,7 @@ def metrics(store, settings) -> dict:
     running = store.count_running_sessions()
     return {
         "counts": states, "groups": groups, "queue_depth": groups["backlog"],
+        "learned_rules": store.list_learned_rules(settings.target_repo),
         "executive": {
             "bugs_handled": len(rows),
             "verified_fixes": verified,

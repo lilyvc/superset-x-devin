@@ -253,5 +253,18 @@ class DevinClient:
         params = {"archive": "true"} if archive and self._v3 else None
         await self._request("DELETE", path, params=params)
 
+    # -- knowledge ------------------------------------------------------------
+
+    async def create_knowledge_note(self, *, name: str, body: str, trigger: str,
+                                    pinned_repo: str | None = None) -> dict:
+        if not self._v3:
+            raise RuntimeError("Knowledge notes need the v3 API (set DEVIN_ORG_ID)")
+        payload = {"name": name, "body": body, "trigger": trigger}
+        if pinned_repo:
+            payload["pinned_repo"] = pinned_repo
+        resp = await self._request("POST", f"{self._base}/knowledge/notes", json=payload,
+                                   retry=False)
+        return resp.json()
+
     async def aclose(self) -> None:
         await self._client.aclose()

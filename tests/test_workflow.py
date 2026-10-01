@@ -126,6 +126,8 @@ class FakeDevin:
         self._counter = 0
         self.terminated: list[str] = []
         self.adoptable: dict | None = None
+        self.messages: list[tuple[str, str]] = []
+        self.notes: list[dict] = []
 
     async def create_session(self, prompt, *, title=None, tags=None,
                              structured_output_schema=None, max_acu_limit=None,
@@ -172,7 +174,14 @@ class FakeDevin:
     async def send_message(self, session_id, message):
         if session_id not in self.sessions:
             raise RuntimeError(f"unknown session {session_id}: cannot resume")
+        self.messages.append((session_id, message))
         return {"ok": True}
+
+    async def create_knowledge_note(self, *, name, body, trigger, pinned_repo=None):
+        note = {"note_id": f"note-{len(self.notes) + 1}", "name": name, "body": body,
+                "trigger": trigger, "pinned_repo": pinned_repo}
+        self.notes.append(note)
+        return note
 
     async def adopt_session(self, tags):
         return self.adoptable
@@ -985,6 +994,50 @@ def test_devin_client_gives_up_after_max_retries():
     with pytest.raises(httpx.HTTPStatusError):
         asyncio.run(client.get_session("s1"))
     asyncio.run(client.aclose())
+
+
+def _review_with_rule(tmp_path, association):
+    github = FakeGitHub([_issue()])
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    for _ in range(3):
+        asyncio.run(engine.tick())
+    store.set_state(1, State.READY_FOR_REVIEW, pr_number=5,
+                    pr_url="https://github.com/owner/repo/pull/5")
+    github.reviews[5] = [
+        {"id": 7, "body": "PRs must include a before/after screenshot.",
+         "state": "CHANGES_REQUESTED", "author_association": association,
+         "user": {"login": "maintainer"}},
+    ]
+    asyncio.run(engine._replies())
+    remediator = next(s for s in store.get_sessions(1) if s["role"] == "remediator")
+    response = devin.sessions[remediator["session_id"]]
+    response["structured_output"] = {
+        **response["structured_output"],
+        "learned_rules": ["PRs must include a before/after screenshot."],
+    }
+    asyncio.run(engine.tick())
+    asyncio.run(engine.tick())
+    return store, devin
+
+
+def test_maintainer_review_rule_becomes_knowledge(tmp_path):
+    store, devin = _review_with_rule(tmp_path, "MEMBER")
+    assert "learned_rules" in devin.messages[-1][1]
+    assert len(devin.notes) == 1
+    assert devin.notes[0]["pinned_repo"] == "owner/repo"
+    assert [r["rule"] for r in store.list_learned_rules("owner/repo")] == [
+        "PRs must include a before/after screenshot."]
+    assert any(e["kind"] == "knowledge_learned" for e in store.get_events(1))
+
+
+def test_outsider_review_rule_is_not_saved(tmp_path):
+    store, devin = _review_with_rule(tmp_path, "NONE")
+    assert "learned_rules" not in devin.messages[-1][1]
+    assert devin.notes == []
+    assert store.list_learned_rules("owner/repo") == []
 
 
 def test_create_session_is_never_auto_retried():

@@ -86,6 +86,11 @@ class Store:
                     at TEXT NOT NULL, kind TEXT NOT NULL, from_state TEXT,
                     to_state TEXT, detail TEXT
                 );
+                CREATE TABLE IF NOT EXISTS learned_rules (
+                    repo TEXT NOT NULL, rule TEXT NOT NULL, note_id TEXT,
+                    workflow_id INTEGER, pr_url TEXT, created_at TEXT NOT NULL,
+                    PRIMARY KEY (repo, rule)
+                );
                 CREATE TABLE IF NOT EXISTS issue_origins (
                     repo TEXT NOT NULL, issue_number INTEGER NOT NULL,
                     origin TEXT NOT NULL, parent_issue_number INTEGER,
@@ -310,6 +315,28 @@ class Store:
                 (repo, limit),
             ).fetchall()
         return [_decode(r, JSON_WORKFLOW_FIELDS) for r in rows]
+
+    def has_learned_rule(self, repo: str, rule: str) -> bool:
+        with self._conn() as conn:
+            return conn.execute("SELECT 1 FROM learned_rules WHERE repo=? AND rule=?",
+                                (repo, rule)).fetchone() is not None
+
+    def add_learned_rule(self, repo: str, rule: str, note_id: str | None,
+                         workflow_id: int, pr_url: str | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO learned_rules VALUES (?,?,?,?,?,?)",
+                (repo, rule, note_id, workflow_id, pr_url, utcnow()),
+            )
+
+    def list_learned_rules(self, repo: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT l.rule, l.note_id, l.pr_url, l.created_at, w.issue_number "
+                "FROM learned_rules l LEFT JOIN workflows w ON w.id=l.workflow_id "
+                "WHERE l.repo=? ORDER BY l.created_at DESC", (repo,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def children_of(self, repo: str, issue_number: int) -> list[dict]:
         """Workflows that were discovered by (as follow-ups of) this issue."""

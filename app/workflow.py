@@ -20,6 +20,7 @@ from .prompts import (
     ANALYSIS_SCHEMA,
     DEDUP_SCHEMA,
     INVESTIGATION_SCHEMA,
+    LEARN_RULES_NOTE,
     REMEDIATION_SCHEMA,
     TRIAGE_SCHEMA,
     analyst_prompt,
@@ -450,6 +451,10 @@ class WorkflowEngine:
             f"{comment.get('body', '')}\n\n"
             "Address the feedback on the same PR branch and update the structured output."
         )
+        if self._trusted_reviewer(comment):
+            note += "\n\n" + LEARN_RULES_NOTE
+            self.store.add_event(workflow["id"], "trusted_feedback",
+                                 detail={"comment_id": comment.get("id"), "login": login})
         session = next((s for s in self.store.get_sessions(workflow["id"], active_only=True)
                         if s["role"] == Role.REMEDIATOR.value), None)
         if session is not None:
@@ -478,9 +483,45 @@ class WorkflowEngine:
             "The previous remediator session could not be resumed; address "
             "this feedback on the same PR."
         )
+        if self._trusted_reviewer(comment):
+            context += "\n" + LEARN_RULES_NOTE
         await self._create_role_session(workflow, Role.REMEDIATOR, extra_context=context)
         self.store.add_event(workflow["id"], "pr_comment_recovery_session",
                              detail={"comment_id": comment.get("id")})
+
+    _TRUSTED_ASSOCIATIONS: ClassVar[set[str]] = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+    def _trusted_reviewer(self, comment: dict) -> bool:
+        return (self.settings.learn_from_reviews
+                and comment.get("author_association") in self._TRUSTED_ASSOCIATIONS)
+
+    async def learn(self, workflow: dict, rules: list) -> None:
+        """Persist standing rules from trusted review feedback as Devin
+        Knowledge pinned to the repo, so every future session applies them."""
+        if not self.settings.learn_from_reviews or not rules:
+            return
+        if not any(e["kind"] == "trusted_feedback" for e in self.store.get_events(workflow["id"])):
+            return
+        repo = workflow["repo"]
+        for rule in (str(r).strip() for r in rules):
+            if not rule or self.store.has_learned_rule(repo, rule):
+                continue
+            try:
+                note = await self.devin.create_knowledge_note(
+                    name=f"Review rule: {rule[:60]}",
+                    trigger=f"When investigating, fixing, or opening a PR in {repo}",
+                    body=f"{rule}\n\nLearned from reviewer feedback on {workflow.get('pr_url')}.",
+                    pinned_repo=repo,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not save knowledge note: %s", exc)
+                self.store.add_event(workflow["id"], "knowledge_failed",
+                                     detail={"rule": rule, "error": str(exc)})
+                continue
+            self.store.add_learned_rule(repo, rule, note.get("note_id"),
+                                        workflow["id"], workflow.get("pr_url"))
+            self.store.add_event(workflow["id"], "knowledge_learned",
+                                 detail={"rule": rule, "note_id": note.get("note_id")})
 
     _RESUMABLE_ROLES: ClassVar[set[str]] = {
         Role.INVESTIGATOR.value,
