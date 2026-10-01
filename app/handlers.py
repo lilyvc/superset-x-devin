@@ -272,16 +272,15 @@ async def handle_analyst(engine: WorkflowEngine, s: SettledSession) -> None:
         return
     followup_number = issue_number_from_url(out.get("followup_issue_url"))
     if followup_number:
-        already_known = (
-            engine.store.get_issue_origin(workflow["repo"], followup_number)
-            or engine.store.get_workflow(workflow["repo"], followup_number)
+        # Always (re)record provenance: the poller usually discovers the filed
+        # issue before this session settles, so the workflow already exists
+        # with origin=DEVIN_DISCOVERED (label path) but no parent recorded.
+        # record_issue_origin is idempotent and only fills missing fields.
+        engine.store.record_issue_origin(
+            workflow["repo"], followup_number, Origin.DEVIN_DISCOVERED.value,
+            parent_issue_number=workflow["issue_number"],
+            session_id=row["session_id"],
         )
-        if not already_known:
-            engine.store.record_issue_origin(
-                workflow["repo"], followup_number, Origin.DEVIN_DISCOVERED.value,
-                parent_issue_number=workflow["issue_number"],
-                session_id=row["session_id"],
-            )
     await engine.comment(
         workflow,
         f"**Retro Devin — defect-family analysis**\n\n"

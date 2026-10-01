@@ -303,12 +303,18 @@ class Store:
                 "INSERT OR IGNORE INTO issue_origins VALUES (?,?,?,?,?,?)",
                 (repo, issue_number, origin, parent_issue_number, session_id, utcnow()),
             )
-        # If the workflow already exists, stamp it now.
+        # If the workflow already exists (e.g. the poller discovered the issue
+        # before the filing session settled), stamp any provenance it lacks —
+        # without clobbering a parent/session already recorded.
         workflow = self.get_workflow(repo, issue_number)
-        if workflow and workflow.get("origin") != origin:
+        if workflow and (workflow.get("origin") != origin
+                         or (parent_issue_number and not workflow.get("parent_issue_number"))
+                         or (session_id and not workflow.get("discovered_by_session_id"))):
             self.set_state(workflow["id"], workflow["state"], origin=origin,
-                           parent_issue_number=parent_issue_number,
-                           discovered_by_session_id=session_id)
+                           parent_issue_number=workflow.get("parent_issue_number")
+                           or parent_issue_number,
+                           discovered_by_session_id=workflow.get("discovered_by_session_id")
+                           or session_id)
 
 
     def get_issue_origin(self, repo: str, issue_number: int) -> dict | None:
