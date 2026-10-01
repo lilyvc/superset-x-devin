@@ -4,17 +4,17 @@ A service that autonomously investigates incoming issues and fixes bugs in `TARG
 
 ## How it works
 
-Python orchestrates the workflow: it starts Devin sessions, limits concurrency, stores progress, and controls state transitions. Devin investigates bugs, writes fixes, and reports results.
+The service is written in Python and orchestrates the workflow: it starts Devin sessions, limits concurrency, stores progress, and controls state transitions. Devin investigates bugs, writes fixes, and reports results.
 
-Each Devin role returns a structured report defined by an output contract. Deterministic Python gates check required fields and reported outcomes before allowing the workflow to advance. For example, investigation requires reproduction evidence and a root cause; remediation requires a PR URL, a successful reproduction rerun, and passed test results. The service checks GitHub CI separately.
+Each Devin role returns a structured report defined by an output contract. The service applies deterministic gates to check required fields and reported outcomes before allowing the workflow to advance. For example, investigation requires reproduction evidence and a root cause; remediation requires a PR URL, a successful reproduction rerun, and passed test results. The service checks GitHub CI separately.
 
-1. **Intake:** Python collects issues through polling or webhooks and applies configured filters.
+1. **Intake:** The service collects issues through polling or webhooks and applies configured filters.
 2. **Triage:** Devin decides whether to investigate, request clarification, or skip the issue.
 3. **Investigation:** Devin reproduces the bug and reports expected and observed behavior, reproduction steps, evidence, a root cause, and a verification plan. The service checks open PRs for an existing fix before remediation.
 4. **Remediation:** Devin writes a fix and regression tests, reruns the original reproduction, and opens a PR. Changes to existing test expectations require maintainer approval.
-5. **CI:** By default, Python requires GitHub checks to pass before setting `READY_FOR_REVIEW`. Failed checks go back to the Remediator, which fixes failures caused by its change or opens a separate CI-fix PR for unrelated failures. After that PR merges, the Remediator updates the original fix branch.
+5. **CI:** By default, the service requires GitHub checks to pass before setting `READY_FOR_REVIEW`. Failed checks go back to the Remediator, which fixes failures caused by its change or opens a separate CI-fix PR for unrelated failures. After that PR merges, the Remediator updates the original fix branch.
 6. **Related defect analysis:** Once a fix PR exists, a separate Devin session looks for related bug patterns and files follow-up issues.
-7. **Completion:** Python marks the workflow `COMPLETED` when the fix PR merges. Workflows in `NEEDS_INFO` or `BLOCKED` wait for human input.
+7. **Completion:** The service marks the workflow `COMPLETED` when the fix PR merges. Workflows in `NEEDS_INFO` or `BLOCKED` wait for human input.
 
 Comments on tracked issues and PRs are forwarded to an active or resumed Devin session. Standing rules from trusted maintainer reviews are saved as [Devin Knowledge](https://docs.devin.ai/product-guides/knowledge) notes pinned to the repo for future sessions.
 
