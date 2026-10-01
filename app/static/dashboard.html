@@ -40,7 +40,7 @@ const OUTCOME={
   REPRODUCED:['Reproduced','REPRODUCED'],ROOT_CAUSE_FOUND:['Root cause found','REPRODUCED'],
   NEEDS_INFO:['Needs input','NEEDS_INFO'],BLOCKED:['Blocked','BLOCKED'],
   SKIPPED:['Skipped','SKIPPED'],NOT_REPRODUCIBLE:['Not reproducible','NOT_REPRODUCIBLE'],
-  FAILED:['Failed','FAILED'],ESCALATED:['Escalated','ESCALATED'],
+  FAILED:['Failed','FAILED'],ESCALATED:['Awaiting human','ESCALATED'],
   TRIAGING:['Triaging','TRIAGING'],QUEUED:['Queued','QUEUED'],DISCOVERED:['New','DISCOVERED'],
 };
 function dur(s){if(s==null)return '–';s=Math.round(s);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return (s/3600).toFixed(1)+'h';return (s/86400).toFixed(1)+'d'}

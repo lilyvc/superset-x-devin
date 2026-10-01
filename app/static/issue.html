@@ -22,7 +22,7 @@ const STAGE={
   READY_FOR_REVIEW:'Ready for review',COMPLETED:'Merged',CI_CHECKING:'CI checking',PR_OPENED:'PR open',
   REMEDIATING:'Remediating',VERIFYING:'Verifying',INVESTIGATING:'Investigating',REPRODUCED:'Reproduced',
   ROOT_CAUSE_FOUND:'Root cause found',NEEDS_INFO:'Needs input',BLOCKED:'Blocked',SKIPPED:'Skipped',
-  NOT_REPRODUCIBLE:'Not reproducible',FAILED:'Failed',ESCALATED:'Escalated',TRIAGING:'Triaging',
+  NOT_REPRODUCIBLE:'Not reproducible',FAILED:'Failed',ESCALATED:'Awaiting human',TRIAGING:'Triaging',
   QUEUED:'Queued',DISCOVERED:'New'};
 function ago(iso){if(!iso)return '–';const s=(Date.now()-new Date(iso))/1000;
   if(s<60)return Math.floor(s)+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';
