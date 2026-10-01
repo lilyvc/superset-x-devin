@@ -17,6 +17,7 @@ The service stores its state outside the target repository. It does not install 
 10. Comments on tracked issues and PRs reach the active Devin session — or resume it when it has finished.
 
 The service can also mark an issue `NOT_REPRODUCIBLE`, `SKIPPED`, `FAILED`, or `ESCALATED`.
+Each role runs as its own Devin session with a per-role agent mode and ACU cap (cheap modes for triage/dedup, `fusion` for remediation — see [Operations](docs/OPERATIONS.md)). Completed analyses feed back into new prompts as known defect families, so the system accumulates knowledge across issues.
 
 ## Quick start
 
