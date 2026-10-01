@@ -232,6 +232,18 @@ class WorkflowEngine:
                     await self._check_ci_fix_pr(workflow)
                 if self.settings.ci_required:
                     await self._reconcile_ci(workflow, pull)
+                else:
+                    self.store.set_state(
+                        workflow["id"], State.READY_FOR_REVIEW, ci_status="skipped",
+                    )
+                    self.store.add_event(
+                        workflow["id"], "ci_skipped", detail="CI_REQUIRED=false",
+                    )
+                    await self.comment(
+                        workflow,
+                        f"**Fix ready for review:** {workflow['pr_url']}\n\n"
+                        "_GitHub CI verification is disabled (CI_REQUIRED=false)._",
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("could not reconcile PR #%s: %s", workflow["pr_number"], exc)
                 self.store.add_event(

@@ -22,54 +22,51 @@ Each role has its own session and ACU cap. Default modes: `lite` for triage/dedu
 
 ## Prerequisites
 
-1. Choose a target repo, such as a Superset fork. Enable Issues under Settings → General → Features.
-2. Connect GitHub in Devin with access to the repo, then add it to your [Devin environment](https://docs.devin.ai/onboard-devin/environment). Superset's [AGENTS.md](https://github.com/apache/superset/blob/master/AGENTS.md) covers build and test setup.
-3. Create a service user under Settings → Devin API → Service users with session and Knowledge write permissions. Record its API key and org id (`org-…`).
-4. Create a fine-grained GitHub token with Issues and Pull requests read/write, plus Checks and Commit statuses read.
+1. Choose a GitHub target repo with Issues enabled and a reproducible bug.
+2. Connect GitHub in Devin with permission to push branches and open PRs in that repo. Add it to your [Devin environment](https://docs.devin.ai/onboard-devin/environment) with working dependencies and test commands. Sessions follow the target repo's `AGENTS.md` and setup docs.
+3. Create a [Devin service user](https://docs.devin.ai/api-reference/authentication) with permission to create, read, message, and terminate sessions. Enable Knowledge writes for review learning. Record its API key and organization id (`org-…`). See [Operations](docs/OPERATIONS.md#devin-credential) for permissions and mode overrides.
+4. Create a fine-grained GitHub token scoped to the target repo with Issues and Pull requests read/write, plus Checks and Commit statuses read. This token is separate from Devin's GitHub integration.
 
 ## Start the service
 
 You need Docker with Compose v2 (`docker compose`).
 
-1. Clone this repo and `cd` into it.
-2. Copy `.env.example` to `.env`.
-3. Set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`, and `ADMIN_TOKEN` in `.env`.
+1. Run `git clone https://github.com/lilyvc/superset-x-devin.git` and `cd superset-x-devin`.
+2. Run `cp .env.example .env`.
+3. Set `TARGET_REPO=owner/name`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, and `DEVIN_ORG_ID` in `.env`.
 4. Run `docker compose up --build`.
 5. Open `http://localhost:8000`. The **Setup problem** banner lists configuration errors.
 
-Open issues are processed at startup. Set `POLL_BACKLOG=false` for new issues only.
+Open issues are processed at startup. Set `POLL_BACKLOG=false` before starting for new issues only. To test one issue, set `ELIGIBILITY_LABEL=devin-test` and give that issue the same label.
 
-To poll immediately:
+To poll immediately, set an `ADMIN_TOKEN` in `.env`, restart the service, and run:
 
 ```bash
 set -a; . ./.env; set +a
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
 ```
 
-Polling runs every 5 seconds by default and works locally. For instant delivery, expose `POST /webhooks/github` and configure `GITHUB_WEBHOOK_SECRET`. See [Operations](docs/OPERATIONS.md) for webhook events, configuration, and running without Docker.
+Polling runs every 5 seconds by default and works locally. For instant issue intake, expose `POST /webhooks/github` and configure `GITHUB_WEBHOOK_SECRET`. See [Operations](docs/OPERATIONS.md) for webhook events, configuration, and running without Docker.
 
-## Try a sample bug
+## Try one bug
 
-Sessions are real. Set `MAX_TOTAL_ACUS` to stop new sessions at the budget; running sessions finish under their own caps.
+Sessions are real and consume ACUs. Set `MAX_TOTAL_ACUS` to stop new sessions at the recorded budget; running sessions keep their own caps.
 
-1. Start the service with `TARGET_REPO` set to your Superset fork.
-2. File this issue:
+1. Confirm `curl http://localhost:8000/healthz` reports `"ok": true`. This checks startup credentials and repo access; branch pushes, comments, and Knowledge writes are checked when used.
+2. File an issue in `TARGET_REPO` with a failing command or UI steps, expected behavior, observed behavior, and the tested version:
 
-   > **Title:** Time-comparison "percentage" returns inf when the baseline value is 0
+   > **Title:** [Component] produces [wrong result] for [input]
    >
-   > `superset/utils/pandas_postprocessing/compare.py` divides `(s_df - c_df) / c_df` with no zero guard. With compare type `percentage` or `ratio`, a baseline of 0 produces `inf`: chart cells show blank and CSV exports contain `inf`.
-   >
-   > ```python
-   > import pandas as pd
-   > from superset.utils.pandas_postprocessing.compare import compare
-   > df = pd.DataFrame({"y": [100.0, 0.0, 2.0], "z": [0.0, 0.0, 4.0]})
-   > compare(df, source_columns=["y"], compare_columns=["z"], compare_type="percentage")
-   > # percentage column: [inf, nan, -0.5]; expected NaN where the baseline is 0
-   > ```
+   > Version/commit: ...
+   > Steps or command: ...
+   > Expected: ...
+   > Observed output: ...
 
 3. Follow progress and session links in the dashboard. Updates also appear on the issue.
-4. Comment to guide Devin. Try a maintainer review rule such as "PRs must list affected chart types" to see **Learned from reviews**.
+4. Comment to guide Devin. On the fix PR, post a maintainer rule such as "PRs must include reproduction steps" to see **Learned from reviews** after the remediator reports it.
 5. Review and merge the fix PR to complete the workflow.
+
+GitHub CI must pass by default. If the target repo has no CI, set `CI_REQUIRED=false` before starting. Otherwise its PR stays in **CI checking** with an unverified result.
 
 ## Documentation
 
