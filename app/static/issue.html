@@ -155,6 +155,7 @@ async function load(){
 async function main(){
   const h=await fetch('/healthz').then(r=>r.json());window.repo=h.target_repo;
   await load();
+  setInterval(()=>load().catch(console.error),5000);
 }
 main().catch(e=>{$('#wmain').innerHTML='<div class="muted">'+esc(e)+'</div>'});
 </script>
