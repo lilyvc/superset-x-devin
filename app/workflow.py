@@ -311,7 +311,7 @@ class WorkflowEngine:
             )
 
     async def _replies(self):
-        if self._github_login is None and not self.settings.dry_run:
+        if self._github_login is None:
             try:
                 self._github_login = (await self.github.get_authenticated_user()).get("login")
             except Exception as exc:  # noqa: BLE001
@@ -760,12 +760,9 @@ class WorkflowEngine:
         )
 
     async def comment(self, workflow: dict, body: str):
-        if self.settings.dry_run:
-            logger.info("[dry-run] would comment on #%s: %s", workflow["issue_number"], body)
-            self.store.add_event(workflow["id"], "comment_posted", detail=body)
-            return
         comment = await self.github.post_issue_comment(workflow["repo"], workflow["issue_number"], body)
-        self.store.add_event(workflow["id"], "comment_posted", detail={"comment_id": comment.get("id")})
+        self.store.add_event(workflow["id"], "comment_posted",
+                             detail={"comment_id": comment.get("id"), "body": body})
 
     async def handle_issue_event(self, payload: dict) -> dict:
         if payload.get("action") not in {"opened", "reopened"}:

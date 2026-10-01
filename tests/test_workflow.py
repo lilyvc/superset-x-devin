@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.config import Settings
-from app.devin_client import DevinClient
 from app.gates import investigation_gate, verification_gate
 from app.handlers import SettledSession, handle_analyst
 from app.parsing import issue_number_from_url
@@ -116,23 +115,81 @@ class FakeGitHub:
         return {"login": "automation"}
 
 
+class FakeDevin:
+    """Stand-in for DevinClient: returns a canned verdict per role."""
+
+    def __init__(self):
+        self.sessions: dict[str, dict] = {}
+        self._counter = 0
+
+    async def create_session(self, prompt, *, title=None, tags=None,
+                             structured_output_schema=None, max_acu_limit=None,
+                             repos=None, devin_mode=None):
+        self._counter += 1
+        session_id = f"fake-session-{self._counter}"
+        role = next((tag.split(":", 1)[1] for tag in tags or []
+                     if tag.startswith("role:")), "investigator")
+        if role == "triage":
+            output = {
+                "verdict": "ACTIONABLE", "issue_kind": "bug",
+                "suspected_area": "fake", "rationale": "Fake triage verdict",
+            }
+        elif role == "investigator":
+            output = {
+                "status": "REPRODUCED", "enough_information": True, "reproduced": True,
+                "expected_behavior": "Expected behavior", "observed_behavior": "Observed behavior",
+                "reproduction_steps": ["Run the reported scenario"],
+                "reproduction_evidence": ["Fake evidence"], "root_cause": "Fake root cause",
+                "verification_plan": ["Run the regression test"], "summary": "Fake investigation",
+            }
+        elif role == "remediator":
+            output = {
+                "status": "PR_OPENED", "pr_url": "https://github.com/example/fake/pull/1",
+                "verification_passed": True, "reproduction_rerun_passed": True,
+                "tests_executed": [{"command": "fake", "result": "passed"}],
+                "verification_evidence": ["Fake evidence"], "summary": "Fake remediation",
+            }
+        elif role == "dedup":
+            output = {"verdict": "PROCEED", "duplicate_pr_url": None,
+                      "rationale": "Fake dedup verdict"}
+        else:
+            output = {"systemic_risk": "none", "summary": "Fake analysis",
+                      "recommended_followup": "NONE", "followup_issue_url": None}
+        session = {"session_id": session_id, "url": "https://app.devin.ai/fake/" + session_id,
+                   "repos": repos or [], "status": "exit", "structured_output": output,
+                   "acus_consumed": 0.0, "pull_requests": []}
+        self.sessions[session_id] = session
+        return session
+
+    async def get_session(self, session_id):
+        return self.sessions[session_id]
+
+    async def send_message(self, session_id, message):
+        if session_id not in self.sessions:
+            raise RuntimeError(f"unknown session {session_id}: cannot resume")
+        return {"ok": True}
+
+    async def aclose(self):
+        pass
+
+
 def _settings(tmp_path, **kwargs):
     defaults = {"target_repo": "owner/repo", "db_path": str(tmp_path / "test.db"),
-                "dry_run": True, "poll_backlog": True, "eligibility_label": "",
+                "poll_backlog": True, "eligibility_label": "",
                 "max_concurrent_devins": 3, "triage_enabled": False,
                 "max_new_issues_per_poll": 10, "ignore_labels": (), "ignore_issue_types": ()}
     defaults.update(kwargs)
     return Settings(**defaults)
 
 
-def test_dry_run_state_machine_restart_safe(tmp_path):
+def test_state_machine_restart_safe(tmp_path):
     issue = {"number": 1, "title": "Bug", "body": "body",
              "html_url": "https://github.com/owner/repo/issues/1",
              "user": {"login": "reporter"}, "labels": []}
     settings = _settings(tmp_path)
     github = FakeGitHub([issue])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.INVESTIGATING.value
@@ -145,7 +202,7 @@ def test_dry_run_state_machine_restart_safe(tmp_path):
     # The analyst only runs once a fix PR exists.
     assert "analyst" in {s["role"] for s in store.get_sessions(1)}
     count = len(store.get_sessions(1))
-    restarted = WorkflowEngine(settings, store, github, DevinClient(""))
+    restarted = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(restarted.tick())
     assert len(store.get_sessions(1)) == count
 
@@ -157,12 +214,12 @@ def test_needs_info_reply_resumes_investigator(tmp_path):
     settings = _settings(tmp_path)
     github = FakeGitHub([issue])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     # Replace canned output with a clarification state for this targeted path.
     session = store.get_sessions(1)[0]
-    devin._dry_sessions[session["session_id"]]["structured_output"] = {
+    devin.sessions[session["session_id"]]["structured_output"] = {
         "status": "NEEDS_INFO", "enough_information": False,
         "clarification_question": "Which environment?", "summary": "Need environment",
     }
@@ -177,14 +234,14 @@ def test_waiting_empty_output_question_stays_needs_info(tmp_path):
     issue = {"number": 1, "title": "Bug", "body": "body",
              "html_url": "https://github.com/owner/repo/issues/1",
              "user": {"login": "reporter"}, "labels": []}
-    settings = _settings(tmp_path, dry_run=False)
+    settings = _settings(tmp_path)
     github = FakeGitHub([issue])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     session = store.get_sessions(1)[0]
-    response = devin._dry_sessions[session["session_id"]]
+    response = devin.sessions[session["session_id"]]
     response.update(status="suspended", status_detail="waiting_for_user",
                     structured_output={},
                     messages=[{"type": "devin_message", "message": "Which database?"}])
@@ -201,14 +258,14 @@ def test_waiting_empty_output_uses_devin_question(tmp_path):
     issue = {"number": 1, "title": "Bug", "body": "body",
              "html_url": "https://github.com/owner/repo/issues/1",
              "user": {"login": "reporter"}, "labels": []}
-    settings = _settings(tmp_path, dry_run=False)
+    settings = _settings(tmp_path)
     github = FakeGitHub([issue])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     session = store.get_sessions(1)[0]
-    devin._dry_sessions[session["session_id"]].update(
+    devin.sessions[session["session_id"]].update(
         status="suspended", status_detail="waiting_for_user",
         structured_output={},
         messages=[{"type": "devin_message", "message": "Please share the version."}],
@@ -225,7 +282,7 @@ def test_merged_pr_reaches_completed(tmp_path):
     settings = _settings(tmp_path)
     github = FakeGitHub([issue])
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
@@ -247,7 +304,7 @@ def test_autonomous_intake_triages_then_investigates(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True)
     github = FakeGitHub([_issue()])
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(engine.tick())
     workflow = store.get_workflow("owner/repo", 1)
     assert workflow["state"] == State.TRIAGING.value
@@ -261,11 +318,11 @@ def test_triage_skip_marks_skipped_with_reason(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True)
     github = FakeGitHub([_issue()])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     session = store.get_sessions(1)[0]
-    devin._dry_sessions[session["session_id"]]["structured_output"] = {
+    devin.sessions[session["session_id"]]["structured_output"] = {
         "verdict": "SKIP", "issue_kind": "question", "skip_reason": "NOT_ENGINEERING",
         "rationale": "Support question about configuring OAuth.",
     }
@@ -282,11 +339,11 @@ def test_triage_needs_info_asks_then_reply_queues_investigation(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True)
     github = FakeGitHub([_issue()])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     session = store.get_sessions(1)[0]
-    devin._dry_sessions[session["session_id"]]["structured_output"] = {
+    devin.sessions[session["session_id"]]["structured_output"] = {
         "verdict": "NEEDS_INFO", "issue_kind": "unclear",
         "clarification_question": "Which Superset version?",
         "needs_info_kind": "NEEDS_REPORTER_INFO", "rationale": "No version given.",
@@ -302,7 +359,7 @@ def test_analysis_labeled_issue_is_devin_discovered_not_ignored(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True)
     github = FakeGitHub([_issue(labels=[{"name": "devin-analysis"}])])
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(engine.tick())
     workflow = store.get_workflow("owner/repo", 1)
     # triaged and fixed like any issue — not filtered out
@@ -317,7 +374,7 @@ def test_intake_skips_without_spending_devin(tmp_path):
               _issue(2, type={"name": "Feature"}),
               _issue(3)]
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, FakeGitHub(issues), DevinClient(""))
+    engine = WorkflowEngine(settings, store, FakeGitHub(issues), FakeDevin())
     asyncio.run(engine.tick())
     assert store.get_workflow("owner/repo", 1)["state"] == State.SKIPPED.value
     assert store.get_workflow("owner/repo", 2)["state"] == State.SKIPPED.value
@@ -330,7 +387,7 @@ def test_max_new_issues_per_poll(tmp_path):
                          max_concurrent_devins=10)
     store = Store(settings.db_path)
     engine = WorkflowEngine(settings, store, FakeGitHub([_issue(i) for i in range(1, 6)]),
-                            DevinClient(""))
+                            FakeDevin())
     asyncio.run(engine.tick())
     assert len(store.list_workflows()) == 2
     asyncio.run(engine.tick())
@@ -341,7 +398,7 @@ def test_lookback_limit_skips_old_issues(tmp_path):
     settings = _settings(tmp_path, triage_enabled=True, issue_lookback_days=30)
     old = _issue(1, created_at="2020-01-01T00:00:00+00:00")
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, FakeGitHub([old]), DevinClient(""))
+    engine = WorkflowEngine(settings, store, FakeGitHub([old]), FakeDevin())
     asyncio.run(engine.tick())
     workflow = store.get_workflow("owner/repo", 1)
     assert workflow["state"] == State.SKIPPED.value
@@ -355,21 +412,21 @@ def test_concurrency_cap(tmp_path):
                "user": {"login": "reporter"}, "labels": []} for i in range(1, 6)]
     settings = _settings(tmp_path, max_concurrent_devins=2)
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, FakeGitHub(issues), DevinClient(""))
+    engine = WorkflowEngine(settings, store, FakeGitHub(issues), FakeDevin())
     asyncio.run(engine.tick())
     assert store.count_active_sessions() == 2
     assert len(store.get_sessions(store.list_workflows()[0]["id"])) == 1
 
 
 def _run_to_ci_checking(tmp_path, github=None, **settings_kwargs):
-    """Drive the canned dry-run pipeline to the CI gate and return the pieces."""
+    """Drive the canned pipeline to the CI gate and return the pieces."""
     issue = {"number": 1, "title": "Bug", "body": "body",
              "html_url": "https://github.com/owner/repo/issues/1",
              "user": {"login": "reporter"}, "labels": []}
     settings = _settings(tmp_path, **settings_kwargs)
     github = github or FakeGitHub([issue])
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
@@ -429,7 +486,7 @@ def test_dedup_skips_when_pr_already_links_issue(tmp_path):
     github = FakeGitHub([_issue()], pulls=pulls)
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
@@ -443,19 +500,19 @@ def test_dedup_skips_when_pr_already_links_issue(tmp_path):
 
 
 def test_dedup_ambiguous_pr_uses_dedup_session(tmp_path):
-    pulls = [{"number": 7, "title": "fix dry-run root cause handling",
-              "body": "changes the dry-run root cause code path",
+    pulls = [{"number": 7, "title": "fix root cause handling",
+              "body": "changes the root cause code path",
               "html_url": "https://github.com/owner/repo/pull/7"}]
     github = FakeGitHub([_issue()], pulls=pulls)
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
     workflow = store.get_workflow("owner/repo", 1)
     roles = {s["role"] for s in store.get_sessions(workflow["id"])}
-    # The ambiguous match spawned a dedup session (dry-run verdict PROCEED),
+    # The ambiguous match spawned a dedup session (canned verdict PROCEED),
     # which then cleared the gate and let the remediator dispatch.
     assert "dedup" in roles
     assert "remediator" in roles
@@ -469,7 +526,7 @@ def test_blocked_reply_resumes_finished_session(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     session = store.get_sessions(1)[0]
@@ -491,7 +548,7 @@ def test_pr_comment_resumes_finished_remediator(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     for _ in range(3):
         asyncio.run(engine.tick())
@@ -512,7 +569,7 @@ def test_pr_review_comment_forwards_to_active_remediator(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     asyncio.run(engine.tick())
@@ -534,7 +591,7 @@ def test_pr_review_body_and_bot_filtering(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     for _ in range(3):
         asyncio.run(engine.tick())
@@ -564,13 +621,13 @@ def test_blocked_reply_recovers_with_fresh_session(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     session = store.get_sessions(1)[0]
     store.update_session(session["session_id"], active=0)
     # The session can no longer be resumed (expired/deleted upstream).
-    del devin._dry_sessions[session["session_id"]]
+    del devin.sessions[session["session_id"]]
     store.set_state(1, State.BLOCKED, failure_reason="needed the DB version",
                     waiting_since="2026-01-01T00:00:00+00:00")
     github.comments[1].append({"id": 9, "body": "It's Postgres 16",
@@ -589,7 +646,7 @@ def test_not_reproducible_reply_resumes_investigator(tmp_path):
     github = FakeGitHub([_issue()])
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    devin = DevinClient("")
+    devin = FakeDevin()
     engine = WorkflowEngine(settings, store, github, devin)
     asyncio.run(engine.tick())
     investigator = next(s for s in store.get_sessions(1)
@@ -610,15 +667,15 @@ def test_not_reproducible_reply_resumes_investigator(tmp_path):
 def test_acu_budget_ceiling_stops_dispatch(tmp_path):
     settings = _settings(tmp_path, max_total_acus=0)
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), DevinClient(""))
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), FakeDevin())
     asyncio.run(engine.tick())
     assert store.count_active_sessions() == 0
     assert store.get_workflow("owner/repo", 1)["state"] == State.QUEUED.value
 
 
-class SpyDevin(DevinClient):
+class SpyDevin(FakeDevin):
     def __init__(self):
-        super().__init__("")
+        super().__init__()
         self.created = []
 
     async def create_session(self, prompt, **kwargs):
@@ -643,11 +700,11 @@ def test_role_devin_modes(tmp_path):
     assert modes["analyst"] is None
 
 
-class StuckDevin(DevinClient):
+class StuckDevin(FakeDevin):
     """A Devin session that keeps running and never reports a verdict."""
 
     def __init__(self):
-        super().__init__("")
+        super().__init__()
         self.nudges = []
 
     async def get_session(self, session_id):
@@ -703,7 +760,7 @@ def test_issue_origin_propagates_to_workflow(tmp_path):
     store = Store(settings.db_path)
     store.record_issue_origin("owner/repo", 2, "DEVIN_DISCOVERED",
                             parent_issue_number=1, session_id="sess-ana")
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     asyncio.run(engine.tick())
     child = store.get_workflow("owner/repo", 2)
     assert child["origin"] == "DEVIN_DISCOVERED"
@@ -716,7 +773,7 @@ def test_issue_origin_propagates_to_workflow(tmp_path):
 def test_analyst_followup_records_issue_origin(tmp_path):
     settings = _settings(tmp_path)
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), DevinClient(""))
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), FakeDevin())
     workflow = store.upsert_workflow("owner/repo", 1, title="bug", state="REMEDIATING")
     row = {"session_id": "sess-ana", "url": "https://app.devin.ai/x"}
     out = {"systemic_risk": "low", "summary": "s", "recommended_followup": "FILE",
@@ -744,7 +801,7 @@ def test_analyst_empty_output_posts_no_comment(tmp_path):
     settings = _settings(tmp_path)
     github = FakeGitHub([_issue()])
     store = Store(settings.db_path)
-    engine = WorkflowEngine(settings, store, github, DevinClient(""))
+    engine = WorkflowEngine(settings, store, github, FakeDevin())
     workflow = store.upsert_workflow("owner/repo", 1, title="bug", state="REMEDIATING")
     row = {"session_id": "sess-ana", "url": "https://app.devin.ai/x"}
     asyncio.run(handle_analyst(

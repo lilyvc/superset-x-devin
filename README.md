@@ -21,20 +21,26 @@ Each role runs as its own Devin session with a per-role agent mode and ACU cap (
 
 ## Quick start
 
-1. Copy `.env.example` to `.env`.
-2. Set `TARGET_REPO`, `GITHUB_TOKEN`, `ADMIN_TOKEN`, and `DRY_RUN=true` in `.env`.
-3. Run `docker compose up --build`.
-4. Export `ADMIN_TOKEN` in your shell.
-5. Request one workflow tick from another terminal:
+You need two credentials:
 
-   ```bash
-   curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
-   ```
+- `GITHUB_TOKEN` — a GitHub token for the target repo (issues and pull requests: read and write; checks/commit statuses: read).
+- `DEVIN_API_KEY` — a Devin API key (org secret or personal access token; for a PAT also set `DEVIN_ORG_ID`).
 
-6. Open the dashboard at `http://localhost:8000`.
+Then:
 
-Dry-run uses GitHub reads, fake Devin sessions, and no GitHub comment writes.
-See [Operations](docs/OPERATIONS.md) for the full setup.
+1. Copy `.env.example` to `.env` and set `TARGET_REPO`, `GITHUB_TOKEN`, `DEVIN_API_KEY`, and `ADMIN_TOKEN`.
+2. Run `docker compose up --build`.
+3. Open the dashboard at `http://localhost:8000`. The service polls `TARGET_REPO`, so every open issue gets triaged automatically — file a new issue to watch the pipeline live.
+
+To force an immediate poll instead of waiting for the interval:
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
+```
+
+Optional: point a GitHub webhook (`issues`, `issue_comment`, `pull_request_review`, `pull_request_review_comment` events) at `POST /webhooks/github` and set `GITHUB_WEBHOOK_SECRET` for instant intake instead of polling.
+
+See [Operations](docs/OPERATIONS.md) for the full configuration reference.
 
 ## Documentation
 
@@ -66,7 +72,6 @@ docs/
   ARCHITECTURE.md
   OPERATIONS.md
   PLAN.md
-scripts/simulate.py
 skills/
 tests/
 Dockerfile

@@ -27,11 +27,6 @@ class Settings:
     # PATs use the org-scoped v3 API; service-user keys use v1. Leave empty for v1.
     devin_org_id: str = os.getenv("DEVIN_ORG_ID", "")
 
-    # When true, no external calls are made: the "Devin session" is faked and
-    # the GitHub comment is logged instead of posted. Used by scripts/simulate.py
-    # so the full pipeline can be exercised without credentials.
-    dry_run: bool = _env_bool("DRY_RUN", False)
-
     max_acu_limit: int | None = (
         int(os.getenv("MAX_ACU_LIMIT")) if os.getenv("MAX_ACU_LIMIT") else None
     )

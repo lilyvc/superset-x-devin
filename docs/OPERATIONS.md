@@ -3,8 +3,7 @@
 ## Requirements
 
 Use a persistent host that can run Docker Compose or Python 3.
-Give the service a GitHub token, a Devin credential for live sessions, and a stable SQLite path.
-Dry-run still reads GitHub data. It fakes Devin sessions and suppresses GitHub comment writes.
+Give the service a GitHub token, a Devin credential, and a stable SQLite path.
 
 ## Docker Compose
 
@@ -29,20 +28,6 @@ Compose sets `DB_PATH` to this file inside the container.
 
 The `.env` file does not load by itself in a local Python run.
 The shell command in step 5 exports its values to the service.
-
-## Dry-run walkthrough
-
-1. Copy `.env.example` to `.env`.
-2. Set `TARGET_REPO`, `GITHUB_TOKEN`, and `ADMIN_TOKEN` in `.env`.
-3. Set `DRY_RUN=true` and `ENABLE_POLLING=false` in `.env`.
-4. Load `.env` with `set -a; . ./.env; set +a`.
-5. Start the service with `.venv/bin/uvicorn app.main:app --port 8000`.
-6. Export `ADMIN_TOKEN` in the shell.
-7. Request one tick with `curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now`.
-8. Open the dashboard at `http://localhost:8000`.
-
-The service reads real GitHub issues during the tick. Devin sessions are fake, and GitHub comments are not posted.
-When `ENABLE_POLLING=true`, the service uses `POLL_BACKLOG` at startup.
 
 ## Webhook intake and polling
 
@@ -107,7 +92,6 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `DEVIN_API_KEY` | empty | Devin service-user key or personal access token |
 | `DEVIN_API_BASE_URL` | `https://api.devin.ai` | Devin API base URL |
 | `DEVIN_ORG_ID` | empty | Selects the organization-scoped v3 API |
-| `DRY_RUN` | `false` | Uses fake Devin sessions and suppresses GitHub comment writes |
 | `MAX_ACU_LIMIT` | unset | Optional ACU cap for each Devin session |
 | `ELIGIBILITY_LABEL` | empty | Optional label required for issue intake |
 | `MAX_NEW_ISSUES_PER_POLL` | `5` | Maximum newly discovered issues admitted per poll |
