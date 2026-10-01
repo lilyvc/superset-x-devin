@@ -1,6 +1,6 @@
 # superset-x-devin: GitHub issue-to-fix service
 
-A service that uses Devin to investigate bugs in `TARGET_REPO` and open fix PRs for human review. A dashboard tracks progress, sessions, and evidence.
+A service that uses Devin to investigate bugs in `TARGET_REPO` and open fix PRs for human review. When appropriate, a follow up agent looks for similar defects elsewhere in the repo or deeper root causes. A dashboard tracks progress, sessions, and evidence.
 
 ## How it works
 
