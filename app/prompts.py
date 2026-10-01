@@ -394,9 +394,12 @@ Affected components: {affected_components}
 - Read each candidate PR (title, body, linked issues, diff) — the repo and PRs
   are public. Decide if any of them already fixes THIS root cause, not merely
   a related symptom.
-- DUPLICATE — an open PR already addresses the same root cause. Set
-  duplicate_pr_url to it.
-- PROCEED — no open PR covers this root cause; remediation should go ahead.
+- DUPLICATE — an open PR already addresses the same root cause in ALL of the
+  affected components named above. Set duplicate_pr_url to it.
+- PROCEED — no open PR covers this root cause in every affected component.
+  A PR that fixes the defect in only SOME of the affected components is a
+  PROCEED: the uncovered components still need remediation. Mention the
+  partially-covering PR in the rationale.
 - UNSURE — evidence is genuinely ambiguous and a maintainer should decide.
 
 Do NOT modify code and do NOT open PRs. Fill the structured output and finish.

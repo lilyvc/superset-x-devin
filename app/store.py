@@ -261,6 +261,14 @@ class Store:
             rows = conn.execute(query, values).fetchall()
         return [_decode(r, JSON_SESSION_FIELDS) for r in rows]
 
+    def delete_sessions(self, workflow_id: int, role=None) -> int:
+        query, values = "DELETE FROM sessions WHERE workflow_id=?", [workflow_id]
+        if role:
+            query += " AND role=?"
+            values.append(getattr(role, "value", role))
+        with self._conn() as conn:
+            return conn.execute(query, values).rowcount
+
     def count_active_sessions(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT count(*) FROM sessions WHERE active=1").fetchone()[0]

@@ -1208,3 +1208,20 @@ def test_ci_handoff_disabled(tmp_path):
     _, _, store, devin, _ = _run_to_ci_checking(tmp_path, github=github, max_ci_fix_attempts=0)
     assert not any("CI checks are failing" in m for _, m in devin.messages)
     assert store.get_workflow("owner/repo", 1)["state"] == State.CI_CHECKING.value
+
+
+def test_delete_sessions_by_role(tmp_path):
+    store = Store(_settings(tmp_path).db_path)
+    workflow = store.upsert_workflow(
+        "owner/repo", 1, title="Bug",
+        issue_url="https://github.com/owner/repo/issues/1",
+        state=State.SKIPPED.value, root_cause_at="2026-10-01T00:00:00+00:00")
+    store.record_session(workflow_id=workflow["id"], role="dedup",
+                         session_id="devin-d1", url="u")
+    store.record_session(workflow_id=workflow["id"], role="investigator",
+                         session_id="devin-i1", url="u")
+    assert store.delete_sessions(workflow["id"], "dedup") == 1
+    assert [s["role"] for s in store.get_sessions(workflow["id"])] == ["investigator"]
+    assert store.delete_sessions(workflow["id"], "dedup") == 0
+    assert store.delete_sessions(workflow["id"]) == 1
+    assert store.get_sessions(workflow["id"]) == []
