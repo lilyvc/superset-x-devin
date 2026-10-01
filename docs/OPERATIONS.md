@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Use a persistent host that can run Docker Compose or Python 3.
+Use a persistent host that can run Docker Compose or Python 3.10+.
 Give the service a GitHub token, a Devin credential, and a stable SQLite path.
 
 ## Docker Compose
