@@ -19,7 +19,9 @@ Each Devin role returns a structured report defined by an output contract. The s
 Comments on tracked issues and PRs are forwarded to an active or resumed Devin session. Standing rules from trusted maintainer reviews are saved as [Devin Knowledge](https://docs.devin.ai/product-guides/knowledge) notes pinned to the repo for future sessions.
 
 The service can also mark an issue `NOT_REPRODUCIBLE`, `SKIPPED`, `FAILED`, or `ESCALATED`.
-Each role runs as its own Devin session with a per-role agent mode and ACU cap (see [Operations](docs/OPERATIONS.md)). Completed analyses feed known defect families into future prompts. Maintainer review rules appear under "Learned from reviews" on the dashboard (see [Architecture](docs/ARCHITECTURE.md#learning-from-reviews)).
+Each role runs as its own Devin session with a per-role agent mode and ACU cap. By default, triage and dedup use `lite`, remediation uses `fusion`, and investigation and related defect analysis use the organization's default mode. Modes and caps are configurable (see [Operations](docs/OPERATIONS.md)).
+
+Completed analyses feed known defect families into future prompts. Maintainer review rules appear under "Learned from reviews" on the dashboard (see [Architecture](docs/ARCHITECTURE.md#learning-from-reviews)).
 
 ## Prerequisites
 
