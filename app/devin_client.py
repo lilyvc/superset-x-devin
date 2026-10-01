@@ -1,11 +1,13 @@
 """Resilient client for the Devin sessions API.
 
 Two auth modes:
-  - v3 (normal production path): personal access token (cog_ PAT) against
-    org-scoped endpoints (/v3/organizations/{org_id}/sessions, ...). Selected
-    when org_id is set — required for production.
+  - v3 (normal production path): org-scoped endpoints
+    (/v3/organizations/{org_id}/sessions, ...), selected when org_id is set.
+    Production integrations should authenticate as a service user; a personal
+    access token also works but acts as that human user — use it for scripts,
+    not for the running service.
   - v1 (legacy): service-user key against /v1/sessions. Kept for backward
-    compatibility; new deployments should use v3.
+    compatibility; new deployments should set DEVIN_ORG_ID and use v3.
 
 v1 and v3 build their request bodies separately: field names mostly overlap
 today but their semantics are not guaranteed identical (e.g. status models
@@ -15,6 +17,9 @@ app/devin_status.py normalizes both).
 Resilience: every request goes through _request(), which retries transient
 failures — 429 (rate limit), 5xx, and network errors — with exponential
 backoff + jitter, honoring Retry-After. Non-transient errors raise.
+POST /sessions (session creation) deliberately does NOT auto-retry: if the
+response was lost the session may exist remotely, so the engine searches for
+a matching session by tags (adopt_session) before issuing another create.
 """
 
 import asyncio
@@ -27,7 +32,13 @@ logger = logging.getLogger("devin_client")
 
 # Remote statuses considered done — adopt_session skips these. Anything else
 # (running, suspended, blocked, new, ...) is adoptable during reconciliation.
-_TERMINAL_STATUSES = {"exit", "expired", "finished", "terminated"}
+# Suspended sessions are resumable, so they stay adoptable.
+_TERMINAL_STATUSES = {"exit", "expired", "finished", "terminated", "error"}
+
+
+def _devin_id(session_id: str) -> str:
+    """v3 path parameters expect the `devin-`-prefixed id."""
+    return session_id if session_id.startswith("devin-") else f"devin-{session_id}"
 
 
 class DevinClient:
@@ -49,7 +60,10 @@ class DevinClient:
 
     def _v3_body(self, prompt, *, title, tags, structured_output_schema,
                  max_acu_limit, repos, devin_mode) -> dict:
-        body: dict = {"prompt": prompt, "idempotent": True}
+        # No `idempotent` flag: it is not part of the documented v3 create
+        # schema. Distributed idempotency is achieved by tag-based adoption
+        # (adopt_session) before and after ambiguous create failures instead.
+        body: dict = {"prompt": prompt}
         if title:
             body["title"] = title
         if tags:
@@ -87,7 +101,12 @@ class DevinClient:
 
     # -- resilient transport --------------------------------------------------
 
-    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+    async def _request(self, method: str, path: str, *, retry: bool = True,
+                       **kwargs) -> httpx.Response:
+        if not retry:
+            resp = await self._client.request(method, path, **kwargs)
+            resp.raise_for_status()
+            return resp
         last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
@@ -147,33 +166,64 @@ class DevinClient:
                 max_acu_limit=max_acu_limit, repos=repos,
                 devin_mode=devin_mode,
             )
-        resp = await self._request("POST", f"{self._base}/sessions", json=body)
+        # Never auto-retry a create: a lost response may mean the session
+        # already exists remotely. The engine adopts by tags before retrying.
+        resp = await self._request(
+            "POST", f"{self._base}/sessions", json=body, retry=False)
         return resp.json()  # {session_id, url, ...}
 
+    def _path_id(self, session_id: str) -> str:
+        return _devin_id(session_id) if self._v3 else session_id
+
     async def get_session(self, session_id: str) -> dict:
-        resp = await self._request("GET", f"{self._base}/sessions/{session_id}")
+        resp = await self._request(
+            "GET", f"{self._base}/sessions/{self._path_id(session_id)}")
         return resp.json()
 
     async def send_message(self, session_id: str, message: str) -> dict | None:
         name = "messages" if self._v3 else "message"
         resp = await self._request(
-            "POST", f"{self._base}/sessions/{session_id}/{name}",
+            "POST", f"{self._base}/sessions/{self._path_id(session_id)}/{name}",
             json={"message": message},
         )
         return resp.json()
+
+    async def _v3_sessions_page(self, after: str | None,
+                              page_size: int) -> tuple[list[dict], str | None]:
+        params: dict = {"first": page_size}
+        if after:
+            params["after"] = after
+        resp = await self._request("GET", f"{self._base}/sessions",
+                                   params=params)
+        data = resp.json()
+        items = data.get("items", [])
+        cursor = data.get("end_cursor") if data.get("has_next_page") else None
+        return items, cursor
 
     async def list_sessions(self, *, tags: list[str] | None = None,
                             limit: int = 100) -> list[dict]:
         """List org sessions; filter to those carrying every tag client-side.
 
-        The v1 list endpoint accepts a `tags` filter, but the v3 listing does
-        not document one — so tags are matched locally against each summary's
+        v1 accepts `limit` and returns {"sessions": [...]}; v3 paginates with
+        first/after and returns {"items": [...], "has_next_page": bool,
+        "end_cursor": str}. Neither documents a server-side tags filter on
+        the v3 listing — so tags are matched locally against each summary's
         tag list to keep behavior identical across auth modes.
         """
-        resp = await self._request(
-            "GET", f"{self._base}/sessions", params={"limit": limit})
-        data = resp.json()
-        sessions = data.get("sessions", data) if isinstance(data, dict) else data
+        if self._v3:
+            sessions: list[dict] = []
+            after: str | None = None
+            while len(sessions) < limit:
+                items, after = await self._v3_sessions_page(
+                    after, min(limit - len(sessions), 100))
+                sessions.extend(items)
+                if after is None or not items:
+                    break
+        else:
+            resp = await self._request(
+                "GET", f"{self._base}/sessions", params={"limit": limit})
+            data = resp.json()
+            sessions = data.get("sessions", data) if isinstance(data, dict) else data
         if tags:
             wanted = set(tags)
             sessions = [s for s in sessions
@@ -199,7 +249,7 @@ class DevinClient:
     async def terminate_session(self, session_id: str, *,
                                 archive: bool = False) -> None:
         """Stop the remote session so it stops consuming ACUs."""
-        path = f"{self._base}/sessions/{session_id}"
+        path = f"{self._base}/sessions/{self._path_id(session_id)}"
         params = {"archive": "true"} if archive and self._v3 else None
         await self._request("DELETE", path, params=params)
 

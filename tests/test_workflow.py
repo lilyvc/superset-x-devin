@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -944,7 +945,7 @@ def test_devin_client_retries_transient_errors():
     client = DevinClient("k", org_id="org-x",
                          transport=httpx.MockTransport(handler))
     client._sleep = lambda attempt, resp=None: asyncio.sleep(0)
-    out = asyncio.run(client.create_session("p"))
+    out = asyncio.run(client.get_session("s1"))
     assert out["session_id"] == "s1" and len(calls) == 3
     asyncio.run(client.aclose())
 
@@ -957,5 +958,83 @@ def test_devin_client_gives_up_after_max_retries():
                          transport=httpx.MockTransport(handler))
     client._sleep = lambda attempt, resp=None: asyncio.sleep(0)
     with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(client.get_session("s1"))
+    asyncio.run(client.aclose())
+
+
+def test_create_session_is_never_auto_retried():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(500)
+
+    client = DevinClient("k", org_id="org-x",
+                         transport=httpx.MockTransport(handler))
+    client._sleep = lambda attempt, resp=None: asyncio.sleep(0)
+    with pytest.raises(httpx.HTTPStatusError):
         asyncio.run(client.create_session("p"))
+    # A lost create response may hide a live remote session — the engine
+    # adopts by tags instead of the transport re-POSTing blindly.
+    assert len(calls) == 1
+    body = json.loads(calls[0].content)
+    assert "idempotent" not in body
+    asyncio.run(client.aclose())
+
+
+def test_v3_paths_use_prefixed_devin_id():
+    urls = []
+
+    def handler(request):
+        urls.append(request.url.path)
+        if request.method == "DELETE":
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={"session_id": "devin-abc"})
+
+    client = DevinClient("k", org_id="org-x",
+                         transport=httpx.MockTransport(handler))
+    asyncio.run(client.get_session("abc"))
+    asyncio.run(client.terminate_session("devin-def"))
+    assert urls == [
+        "/v3/organizations/org-x/sessions/devin-abc",
+        "/v3/organizations/org-x/sessions/devin-def",
+    ]
+    asyncio.run(client.aclose())
+
+
+def test_v3_list_sessions_paginates_and_filters_by_tags():
+    pages = {
+        None: {
+            "items": [
+                {"session_id": "devin-1", "tags": ["repo:x", "issue:1"],
+                 "status": "running", "created_at": "2026-01-01"},
+                {"session_id": "devin-2", "tags": ["repo:x"],
+                 "status": "running", "created_at": "2026-01-02"},
+            ],
+            "has_next_page": True,
+            "end_cursor": "c1",
+        },
+        "c1": {
+            "items": [
+                {"session_id": "devin-3", "tags": ["repo:x", "issue:1"],
+                 "status": "suspended", "created_at": "2026-01-03"},
+                {"session_id": "devin-4", "tags": ["repo:x", "issue:1"],
+                 "status": "error", "created_at": "2026-01-04"},
+            ],
+            "has_next_page": False,
+        },
+    }
+
+    def handler(request):
+        after = request.url.params.get("after") or None
+        return httpx.Response(200, json=pages[after])
+
+    client = DevinClient("k", org_id="org-x",
+                         transport=httpx.MockTransport(handler))
+    out = asyncio.run(client.list_sessions(tags=["repo:x", "issue:1"]))
+    assert [s["session_id"] for s in out] == ["devin-1", "devin-3", "devin-4"]
+    # adopt_session skips terminal statuses (v3 "error") and prefers the
+    # newest live session — a suspended one is resumable, hence adoptable.
+    adopted = asyncio.run(client.adopt_session(["repo:x", "issue:1"]))
+    assert adopted["session_id"] == "devin-3"
     asyncio.run(client.aclose())
