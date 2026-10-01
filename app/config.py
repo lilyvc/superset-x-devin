@@ -23,8 +23,9 @@ class Settings:
 
     devin_api_key: str = os.getenv("DEVIN_API_KEY", "")
     devin_api_base_url: str = os.getenv("DEVIN_API_BASE_URL", "https://api.devin.ai")
-    # Required for production: selects the org-scoped v3 API. Only leave empty
-    # when intentionally using the legacy v1 service-user path.
+    # Required for production: selects the org-scoped v3 API. Works with both
+    # service-user keys (recommended for running services) and PATs. Only
+    # leave empty when intentionally using the legacy v1 path.
     devin_org_id: str = os.getenv("DEVIN_ORG_ID", "")
 
     max_acu_limit: int | None = (

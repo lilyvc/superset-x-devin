@@ -1,8 +1,17 @@
-"""Normalization helpers for Devin v1 and v3 session responses."""
+"""Normalization helpers for Devin v1 and v3 session responses.
+
+v3 statuses (top-level `status`) include running / suspended / finished /
+error; `status_detail` refines them — e.g. waiting_for_user,
+waiting_for_approval, inactivity, finished. Suspended sessions are resumable
+(the message endpoint wakes them), so suspension is "waiting", never final.
+"""
 
 FINAL_STATUSES = {"finished", "expired", "exit", "error"}
 WAITING_STATUSES = {"blocked", "suspend_requested", "suspend_requested_frontend"}
-V3_WAITING_DETAILS = {"waiting_for_user", "inactivity"}
+# v3 status_detail values meaning the session is paused but resumable, or is
+# stopped on a human: it still counts as settled for output processing.
+V3_WAITING_DETAILS = {"waiting_for_user", "waiting_for_approval", "inactivity"}
+V3_FINAL_STATUSES = {"finished", "expired", "exit", "error", "terminated"}
 
 
 def session_state(session: dict) -> tuple[str, str]:
@@ -16,11 +25,10 @@ def session_state(session: dict) -> tuple[str, str]:
         return enum, "running"
     status = session.get("status") or ""
     detail = session.get("status_detail") or ""
-    if status in {"exit", "error"}:
-        return status, "final"
+    if status in V3_FINAL_STATUSES or detail == "finished":
+        return status or detail, "final"
     if status == "suspended" or detail in V3_WAITING_DETAILS:
-        kind = "waiting" if detail == "waiting_for_user" else "final"
-        return f"{status}:{detail}" if detail else status, kind
+        return f"{status}:{detail}" if detail else status, "waiting"
     return status or detail, "running"
 
 
