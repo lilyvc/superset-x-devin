@@ -1225,3 +1225,25 @@ def test_delete_sessions_by_role(tmp_path):
     assert store.delete_sessions(workflow["id"], "dedup") == 0
     assert store.delete_sessions(workflow["id"]) == 1
     assert store.get_sessions(workflow["id"]) == []
+
+
+def test_record_issue_origin_backfills_parent_on_existing_workflow(tmp_path):
+    """Poller may discover an analyst-filed issue before the analyst settles:
+    the workflow exists with origin=DEVIN_DISCOVERED but no parent."""
+    store = Store(_settings(tmp_path).db_path)
+    workflow = store.upsert_workflow(
+        "owner/repo", 71, title="Follow-up",
+        issue_url="https://github.com/owner/repo/issues/71",
+        state=State.DISCOVERED.value, origin="DEVIN_DISCOVERED")
+    store.record_issue_origin("owner/repo", 71, "DEVIN_DISCOVERED",
+                              parent_issue_number=66, session_id="devin-a1")
+    workflow = store.get_workflow("owner/repo", 71)
+    assert workflow["parent_issue_number"] == 66
+    assert workflow["discovered_by_session_id"] == "devin-a1"
+    assert store.get_issue_origin("owner/repo", 71)["parent_issue_number"] == 66
+    # A later call must not clobber an already-recorded parent.
+    store.record_issue_origin("owner/repo", 71, "DEVIN_DISCOVERED",
+                              parent_issue_number=99, session_id="devin-b2")
+    workflow = store.get_workflow("owner/repo", 71)
+    assert workflow["parent_issue_number"] == 66
+    assert workflow["discovered_by_session_id"] == "devin-a1"
