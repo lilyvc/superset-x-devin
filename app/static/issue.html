@@ -88,7 +88,11 @@ async function load(){
       return '';
     }
     if(i===3){
-      if(w.state==='CI_CHECKING'||w.state==='PR_OPENED')return 'waiting on CI'+(w.ci_status?': '+esc(w.ci_status):'');
+      if(w.state==='CI_CHECKING'||w.state==='PR_OPENED'){
+        if(w.ci_fix_pr_url&&!w.ci_fix_pr_merged)return `CI failure is unrelated to the fix — <a href="${esc(w.ci_fix_pr_url)}" target="_blank" onclick="event.stopPropagation()">CI fix PR #${esc(w.ci_fix_pr_url.split('/').pop())} ↗</a> waiting on a maintainer`;
+        if(w.ci_status==='failed'&&(w.sessions||[]).some(s=>s.role==='remediator'&&s.active))return 'CI failing — Devin is triaging the failure';
+        return 'waiting on CI'+(w.ci_status?': '+esc(w.ci_status):'');
+      }
       if(w.state==='COMPLETED')return w.merged_without_changes?'merged without changes':'merged with follow-up commits';
       return w.ci_status==='passed'?'CI green — waiting on a reviewer':'';
     }

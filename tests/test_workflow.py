@@ -90,7 +90,7 @@ class FakeGitHub:
         return next(i for i in self.issues if i["number"] == number)
 
     async def get_pull(self, repo, number):
-        return self.pull
+        return getattr(self, "pulls_by_number", {}).get(number, self.pull)
 
     async def list_open_pulls(self, repo):
         return self.pulls
@@ -1137,3 +1137,74 @@ def test_session_waiting_on_human_frees_its_slot(tmp_path):
     assert store.get_sessions(first["id"], active_only=True)
     assert store.count_running_sessions() == 1
     assert store.get_sessions(second["id"], active_only=True)
+
+
+def _failing_checks():
+    return {"check_runs": [
+        {"name": "e2e", "status": "completed", "conclusion": "failure",
+         "html_url": "https://github.com/owner/repo/runs/1"},
+    ], "statuses": []}
+
+
+def test_ci_failure_is_handed_back_to_remediator_once_per_commit(tmp_path):
+    github = FakeGitHub([_issue()])
+    github.checks = _failing_checks()
+    _, github, store, devin, engine = _run_to_ci_checking(tmp_path, github=github)
+    remediator = next(s for s in store.get_sessions(1) if s["role"] == "remediator")
+    notes = [m for sid, m in devin.messages
+             if sid == remediator["session_id"] and "CI checks are failing" in m]
+    assert len(notes) == 1 and "https://github.com/owner/repo/runs/1" in notes[0]
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.CI_CHECKING.value
+    assert workflow["ci_fix_attempts"] == 1
+    assert store.get_session(remediator["session_id"])["active"] == 1
+    asyncio.run(engine.tick())
+    assert sum("CI checks are failing" in m for _, m in devin.messages) == 1
+    for sha in ("def456", "fed789"):
+        github.pull = {**github.pull, "head": {"sha": sha}}
+        asyncio.run(engine.tick())
+    assert sum("CI checks are failing" in m for _, m in devin.messages) == 2
+    assert "ci_fix_exhausted" in {e["kind"] for e in store.get_events(1)}
+    # Green CI promotes the PR and frees the idle resumed remediator.
+    github.checks = {"check_runs": [
+        {"name": "e2e", "status": "completed", "conclusion": "success"}], "statuses": []}
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["state"] == State.READY_FOR_REVIEW.value
+    assert store.get_session(remediator["session_id"])["active"] == 0
+
+
+def test_unrelated_ci_failure_waits_for_ci_fix_pr_then_updates_branch(tmp_path):
+    github = FakeGitHub([_issue()])
+    github.checks = _failing_checks()
+    _, github, store, devin, engine = _run_to_ci_checking(tmp_path, github=github)
+    remediator = next(s for s in store.get_sessions(1) if s["role"] == "remediator")
+    session = devin.sessions[remediator["session_id"]]
+    session["structured_output"] = {
+        **session["structured_output"],
+        "ci_triage": {"cause": "unrelated", "evidence": "mobile e2e opens an empty dashboard",
+                      "ci_fix_pr_url": "https://github.com/owner/repo/pull/9"},
+    }
+    asyncio.run(engine.tick())
+    workflow = store.get_workflow("owner/repo", 1)
+    assert workflow["state"] == State.CI_CHECKING.value
+    assert workflow["ci_fix_pr_url"] == "https://github.com/owner/repo/pull/9"
+    assert workflow["pr_url"] == "https://github.com/example/fake/pull/1"
+    comments = [b for _, b in github.posted]
+    assert any("unrelated to the fix" in b and "/pull/9" in b for b in comments)
+    assert not any("merged" in m for _, m in devin.messages)
+    github.pulls_by_number = {9: {"state": "closed", "merged": True}}
+    asyncio.run(engine.tick())
+    assert store.get_workflow("owner/repo", 1)["ci_fix_pr_merged"] == 1
+    merged = [m for sid, m in devin.messages
+              if sid == remediator["session_id"] and "was merged" in m]
+    assert len(merged) == 1
+    asyncio.run(engine.tick())
+    assert sum("was merged" in m for _, m in devin.messages) == 1
+
+
+def test_ci_handoff_disabled(tmp_path):
+    github = FakeGitHub([_issue()])
+    github.checks = _failing_checks()
+    _, _, store, devin, _ = _run_to_ci_checking(tmp_path, github=github, max_ci_fix_attempts=0)
+    assert not any("CI checks are failing" in m for _, m in devin.messages)
+    assert store.get_workflow("owner/repo", 1)["state"] == State.CI_CHECKING.value

@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from .config import Settings
 from .devin_status import session_state
-from .gates import ci_verdict, dedup_candidates, intake_skip_reason
+from .gates import ci_verdict, dedup_candidates, failing_check_links, intake_skip_reason
 from .github_client import GitHubClient
 from .handlers import ROLE_HANDLERS, SettledSession
 from .parsing import (
@@ -15,15 +15,18 @@ from .parsing import (
     issue_labels,
     linked_issue_numbers,
     parse_dt,
+    pr_number_from_url,
 )
 from .prompts import (
     ANALYSIS_SCHEMA,
+    CI_FIX_MERGED_NOTE,
     DEDUP_SCHEMA,
     INVESTIGATION_SCHEMA,
     LEARN_RULES_NOTE,
     REMEDIATION_SCHEMA,
     TRIAGE_SCHEMA,
     analyst_prompt,
+    ci_failure_note,
     dedup_prompt,
     investigator_prompt,
     remediator_prompt,
@@ -191,6 +194,8 @@ class WorkflowEngine:
                     continue
                 if workflow["state"] == State.READY_FOR_REVIEW.value:
                     continue
+                if workflow.get("ci_fix_pr_url") and not workflow.get("ci_fix_pr_merged"):
+                    await self._check_ci_fix_pr(workflow)
                 if self.settings.ci_required:
                     await self._reconcile_ci(workflow, pull)
             except Exception as exc:  # noqa: BLE001
@@ -209,11 +214,11 @@ class WorkflowEngine:
             return
         data = await self.github.get_commit_checks(workflow["repo"], head)
         verdict, names = ci_verdict(data)
-        previous = workflow.get("ci_status")
         now = utcnow()
         if verdict == "passed":
             self.store.set_state(workflow["id"], State.READY_FOR_REVIEW,
                                  ci_status="passed", ci_checked_at=now)
+            self._release_idle_remediators(workflow)
             await self.comment(
                 workflow,
                 f"**CI checks passed** — fix ready for review: {workflow.get('pr_url')}",
@@ -237,7 +242,8 @@ class WorkflowEngine:
         else:
             self.store.set_state(workflow["id"], State.CI_CHECKING,
                                  ci_status=verdict, ci_checked_at=now)
-        if verdict == "failed" and previous != "failed":
+        if verdict == "failed" and workflow.get("ci_failed_sha") != head:
+            self.store.set_state(workflow["id"], State.CI_CHECKING, ci_failed_sha=head)
             await self.comment(
                 workflow,
                 "**CI checks are failing on the fix PR** "
@@ -245,6 +251,90 @@ class WorkflowEngine:
                 "_The workflow stays in CI checking — it only moves to ready for "
                 "review once the checks pass._",
             )
+            await self._hand_off_ci_failure(workflow, failing_check_links(data))
+
+    async def _hand_off_ci_failure(self, workflow: dict, failing: list[str]) -> None:
+        """Give a failing head commit back to the Remediator to triage: fix it
+        if its change broke CI, else open a separate CI-fix PR."""
+        limit = self.settings.max_ci_fix_attempts
+        if limit <= 0:
+            return
+        attempts = int(workflow.get("ci_fix_attempts") or 0)
+        if attempts >= limit:
+            self.store.add_event(workflow["id"], "ci_fix_exhausted",
+                                 detail=f"{attempts} automated CI fix attempt(s) used")
+            await self.comment(
+                workflow,
+                f"**CI is still failing after {attempts} automated attempt(s)** — "
+                "this needs a human look.",
+            )
+            return
+        note = ci_failure_note(workflow.get("pr_url"), failing)
+        woken = await self._wake_remediator(workflow, note)
+        if woken is None:
+            await self._create_role_session(workflow, Role.REMEDIATOR, extra_context=note)
+            how, session_id = "recovery_session", None
+        else:
+            how, session_id = woken
+        self.store.set_state(workflow["id"], self.store.get_workflow_by_id(workflow["id"])["state"],
+                             ci_fix_attempts=attempts + 1)
+        self.store.add_event(workflow["id"], "ci_failure_handed_off",
+                             detail={"how": how, "session_id": session_id, "checks": failing[:10]})
+
+    async def _check_ci_fix_pr(self, workflow: dict) -> None:
+        """Once a maintainer merges the separate CI-fix PR, have the
+        Remediator bring the fix PR up to date so CI re-runs."""
+        number = pr_number_from_url(workflow["ci_fix_pr_url"])
+        if number is None:
+            return
+        pull = await self.github.get_pull(workflow["repo"], number)
+        if not pull.get("merged"):
+            return
+        self.store.set_state(workflow["id"], workflow["state"], ci_fix_pr_merged=1)
+        note = CI_FIX_MERGED_NOTE.format(ci_fix_pr_url=workflow["ci_fix_pr_url"],
+                                         pr_url=workflow.get("pr_url"))
+        woken = await self._wake_remediator(workflow, note)
+        if woken is None:
+            await self._create_role_session(workflow, Role.REMEDIATOR, extra_context=note)
+        self.store.add_event(workflow["id"], "ci_fix_merged",
+                             detail={"ci_fix_pr_url": workflow["ci_fix_pr_url"]})
+        await self.comment(
+            workflow,
+            f"**CI fix merged** ({workflow['ci_fix_pr_url']}) — Devin is updating "
+            f"{workflow.get('pr_url')} so CI re-runs.",
+        )
+
+    def _release_idle_remediators(self, workflow: dict) -> None:
+        """A resumed Remediator that settled without new output would hold a
+        concurrency slot forever; free it once the PR is green."""
+        for s in self.store.get_sessions(workflow["id"], active_only=True):
+            if (s["role"] == Role.REMEDIATOR.value
+                    and s.get("devin_status_detail") in {"final", "waiting"}
+                    and s.get("output_fingerprint") == s.get("acted_fingerprint")):
+                self.store.update_session(s["session_id"], active=0, finished_at=utcnow())
+
+    async def _wake_remediator(self, workflow: dict, note: str,
+                               resume_state: State | None = None) -> tuple[str, str] | None:
+        """Deliver a note to the live Remediator, or resume the last one.
+        Returns (how, session_id), or None when there is no session to wake."""
+        session = next((s for s in self.store.get_sessions(workflow["id"], active_only=True)
+                        if s["role"] == Role.REMEDIATOR.value), None)
+        if session is not None:
+            await self.devin.send_message(session["session_id"], note)
+            return "forwarded", session["session_id"]
+        last = next((s for s in reversed(self.store.get_sessions(workflow["id"]))
+                     if s["role"] == Role.REMEDIATOR.value), None)
+        if last is None:
+            return None
+        try:
+            await self.devin.send_message(last["session_id"], note)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not resume remediator %s: %s", last["session_id"], exc)
+            return None
+        self.store.update_session(last["session_id"], active=1, finished_at=None)
+        if resume_state is not None:
+            self.store.set_state(workflow["id"], resume_state, waiting_since=None)
+        return "resumed", last["session_id"]
 
     async def _reconcile_session(self, row: dict) -> None:
         response = await self.devin.get_session(row["session_id"])
@@ -455,28 +545,14 @@ class WorkflowEngine:
             note += "\n\n" + LEARN_RULES_NOTE
             self.store.add_event(workflow["id"], "trusted_feedback",
                                  detail={"comment_id": comment.get("id"), "login": login})
-        session = next((s for s in self.store.get_sessions(workflow["id"], active_only=True)
-                        if s["role"] == Role.REMEDIATOR.value), None)
-        if session is not None:
-            await self.devin.send_message(session["session_id"], note)
-            self.store.add_event(workflow["id"], "pr_comment_forwarded",
+        woken = await self._wake_remediator(workflow, note, resume_state=State.REMEDIATING)
+        if woken is not None:
+            how, session_id = woken
+            kind = "pr_comment_forwarded" if how == "forwarded" else "pr_comment_resumed_session"
+            self.store.add_event(workflow["id"], kind,
                                  detail={"comment_id": comment.get("id"),
-                                         "session_id": session["session_id"]})
+                                         "session_id": session_id})
             return
-        last = next((s for s in reversed(self.store.get_sessions(workflow["id"]))
-                     if s["role"] == Role.REMEDIATOR.value), None)
-        if last is not None:
-            try:
-                await self.devin.send_message(last["session_id"], note)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("could not resume remediator %s: %s", last["session_id"], exc)
-            else:
-                self.store.update_session(last["session_id"], active=1, finished_at=None)
-                self.store.set_state(workflow["id"], State.REMEDIATING, waiting_since=None)
-                self.store.add_event(workflow["id"], "pr_comment_resumed_session",
-                                     detail={"comment_id": comment.get("id"),
-                                             "session_id": last["session_id"]})
-                return
         context = (
             f"A reviewer {where} on the remediation PR {workflow.get('pr_url')} "
             f"(by {login}){location}: {comment.get('body', '')}\n"

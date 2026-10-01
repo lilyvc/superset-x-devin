@@ -82,6 +82,20 @@ def ci_verdict(data: dict) -> tuple[str, list[str]]:
     return "passed", []
 
 
+def failing_check_links(data: dict) -> list[str]:
+    """Failing checks as "name: url" lines a Devin session can open."""
+    lines = []
+    for run in data.get("check_runs") or []:
+        if run.get("status") == "completed" and run.get("conclusion") in _FAILING_CONCLUSIONS:
+            url = run.get("html_url") or run.get("details_url") or ""
+            lines.append(f"{run.get('name') or 'check'}: {url}".rstrip(": "))
+    for status in data.get("statuses") or []:
+        if status.get("state") in {"failure", "error"}:
+            url = status.get("target_url") or ""
+            lines.append(f"{status.get('context') or 'status'}: {url}".rstrip(": "))
+    return lines
+
+
 def intake_skip_reason(issue: dict, settings: Settings, now: datetime) -> str | None:
     """Cheap deterministic pre-filter; returns a skip reason detail or None."""
     labels = issue_labels(issue)
