@@ -4,22 +4,22 @@ A service that autonomously investigates incoming issues and fixes bugs in `TARG
 
 ## How it works
 
-Each step is a separate Devin session. Between steps, plain Python code (no AI) checks the session's structured report before the issue moves on, so an agent can't skip a step by just saying it's done.
+Python orchestrates the workflow: it starts Devin sessions, limits concurrency, stores progress, and controls state transitions. Devin investigates bugs, writes fixes, and reports results.
 
-1. **Intake** — new issues arrive by polling or webhook. Configured filters (labels, age, type) drop some immediately.
-2. **Triage** — a quick Devin session decides: real bug → investigate, unclear → ask the reporter, not a bug → skip.
-3. **Investigate** — Devin reproduces the bug in a real dev environment and reports steps, expected vs. observed behavior, proof, and the root cause.
-   - *Python check:* every one of those fields is filled in, it says "reproduced", and it confirms the current behavior is a bug (not intended). If anything is missing, Devin is asked once to fill it in, then a human is asked.
-   - *Python check:* no open PR already fixes this issue.
-4. **Fix** — Devin writes the fix and a regression test, re-runs the original reproduction, and opens a PR.
-   - *Python check:* all tests it ran passed, the reproduction now passes, and a PR exists. Otherwise it retries, then asks a human.
-   - *Python check:* if the PR changes what existing tests expect, a human must approve that behavior change first.
-5. **CI** — the PR's real GitHub checks must pass before it's marked ready for review. If CI fails, Devin reads the logs: it fixes its own breakage, or opens a separate CI-fix PR when the failure isn't its fault.
-6. **Related defects** — once a fix PR exists, Devin looks for the same bug pattern elsewhere and files follow-up issues.
-7. **Done** — a merged PR completes the issue. Comments on the issue or PR go to the working Devin session (or wake it up). When a maintainer states a standing rule in a review ("PRs must include X"), it's saved as a [Devin Knowledge](https://docs.devin.ai/product-guides/knowledge) note so every future session follows it.
+Each Devin role returns a structured report defined by an output contract. Deterministic Python gates check required fields and reported outcomes before allowing the workflow to advance. For example, investigation requires reproduction evidence and a root cause; remediation requires a PR URL, a successful reproduction rerun, and passed test results. The service checks GitHub CI separately.
+
+1. **Intake:** Python collects issues through polling or webhooks and applies configured filters.
+2. **Triage:** Devin decides whether to investigate, request clarification, or skip the issue.
+3. **Investigation:** Devin reproduces the bug and reports expected and observed behavior, reproduction steps, evidence, a root cause, and a verification plan. The service checks open PRs for an existing fix before remediation.
+4. **Remediation:** Devin writes a fix and regression tests, reruns the original reproduction, and opens a PR. Changes to existing test expectations require maintainer approval.
+5. **CI:** By default, Python requires GitHub checks to pass before setting `READY_FOR_REVIEW`. Failed checks go back to the Remediator, which fixes failures caused by its change or opens a separate CI-fix PR for unrelated failures. After that PR merges, the Remediator updates the original fix branch.
+6. **Related defect analysis:** Once a fix PR exists, a separate Devin session looks for related bug patterns and files follow-up issues.
+7. **Completion:** Python marks the workflow `COMPLETED` when the fix PR merges. Workflows in `NEEDS_INFO` or `BLOCKED` wait for human input.
+
+Comments on tracked issues and PRs are forwarded to an active or resumed Devin session. Standing rules from trusted maintainer reviews are saved as [Devin Knowledge](https://docs.devin.ai/product-guides/knowledge) notes pinned to the repo for future sessions.
 
 The service can also mark an issue `NOT_REPRODUCIBLE`, `SKIPPED`, `FAILED`, or `ESCALATED`.
-Each role runs as its own Devin session with a per-role agent mode and ACU cap (cheap modes for triage/dedup, `fusion` for remediation — see [Operations](docs/OPERATIONS.md)). The system gets better the more it is used: completed analyses feed back into new prompts as known defect families, and maintainer review rules become Devin Knowledge (listed under "Learned from reviews" on the dashboard; see [Architecture](docs/ARCHITECTURE.md#learning-from-reviews)).
+Each role runs as its own Devin session with a per-role agent mode and ACU cap (see [Operations](docs/OPERATIONS.md)). Completed analyses feed known defect families into future prompts. Maintainer review rules appear under "Learned from reviews" on the dashboard (see [Architecture](docs/ARCHITECTURE.md#learning-from-reviews)).
 
 ## Prerequisites
 
