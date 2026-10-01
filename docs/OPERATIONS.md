@@ -99,7 +99,7 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `IGNORE_ISSUE_TYPES` | `feature,task,epic` | Issue types that block intake |
 | `TRIAGE_ENABLED` | `true` | Starts a Triage session for admitted issues |
 | `TRIAGE_ACU_LIMIT` | `2` | ACU cap for a Triage session |
-| `MAX_CONCURRENT_DEVINS` | `3` | Maximum active sessions across roles |
+| `MAX_CONCURRENT_DEVINS` | `3` | Maximum running sessions across roles (sessions parked in `NEEDS_INFO`/`BLOCKED` don't hold a slot) |
 | `MAX_REMEDIATION_ATTEMPTS` | `2` | Maximum verification retries |
 | `MAX_TOTAL_ACUS` | unset | Optional total ACU budget across sessions |
 | `DEDUP_ENABLED` | `true` | Checks open PRs before remediation |

@@ -109,6 +109,7 @@ def metrics(store, settings) -> dict:
     in_progress = sum(r["state"] in _IN_PROGRESS for r in rows)
     merged_prs = [r for r in rows if r["state"] == State.COMPLETED.value and r.get("pr_number")]
     merged_clean = sum(bool(r.get("merged_without_changes")) for r in merged_prs)
+    running = store.count_running_sessions()
     return {
         "counts": states, "groups": groups, "queue_depth": groups["backlog"],
         "executive": {
@@ -128,8 +129,9 @@ def metrics(store, settings) -> dict:
             "merged_without_changes_pct": (
                 merged_clean / len(merged_prs) if merged_prs else None),
         },
-        "active_sessions": store.count_active_sessions(), "max_concurrent": settings.max_concurrent_devins,
-        "utilization": store.count_active_sessions() / settings.max_concurrent_devins
+        "active_sessions": running, "waiting_sessions": store.count_active_sessions() - running,
+        "max_concurrent": settings.max_concurrent_devins,
+        "utilization": running / settings.max_concurrent_devins
         if settings.max_concurrent_devins else 0, "funnel": funnel,
         "rates": {
             "reproduction_rate": reproduced / investigated if investigated else 0,
