@@ -10,6 +10,10 @@
   <span class="grow"></span>
   <span class="muted small"><span class="dot live"></span>updated <span id="updated">–</span></span>
 </header>
+<aside id="setup-problems" class="setup-problems" hidden>
+  <strong>Setup problem</strong>
+  <ul id="setup-problems-list"></ul>
+</aside>
 <main>
 
   <div class="grid g4">
@@ -186,6 +190,9 @@ async function load(){
   const [m,ws,h]=await Promise.all([fetch('/api/metrics').then(r=>r.json()),fetch('/api/workflows').then(r=>r.json()),fetch('/healthz').then(r=>r.json())]);
   $('#repo').textContent='target repo: '+h.target_repo;
   $('#repo').href='https://github.com/'+h.target_repo;
+  const problems=h.problems||[];
+  $('#setup-problems').hidden=!problems.length;
+  $('#setup-problems-list').innerHTML=problems.map(problem=>`<li>${esc(problem)}</li>`).join('');
   const e=m.executive||{},c=m.counts||{};
   $('#k-open').textContent=e.issues_open??'–';
   $('#k-open-sub').textContent=`${e.in_progress||0} active · ${e.awaiting_human||0} waiting`;

@@ -141,6 +141,12 @@ class DevinClient:
 
     # -- sessions -------------------------------------------------------------
 
+    async def check_auth(self) -> None:
+        params = {"first": 1} if self._v3 else {"limit": 1}
+        await self._request(
+            "GET", f"{self._base}/sessions", params=params, retry=False
+        )
+
     async def create_session(
         self,
         prompt: str,

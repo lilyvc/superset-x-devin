@@ -14,8 +14,26 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest ruff
+        run: pip install -r requirements-dev.txt
       - name: Lint
         run: ruff check app tests
       - name: Test
         run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t superset-x-devin .
+      - name: Check health endpoint
+        run: |
+          docker run -d --name sxd -p 8000:8000 -e ENABLE_POLLING=false superset-x-devin
+          for attempt in $(seq 1 30); do
+            if curl -fsS localhost:8000/healthz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs sxd
+          exit 1
