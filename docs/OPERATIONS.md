@@ -60,7 +60,7 @@ Protect the token as a production credential.
 ### Devin credential
 
 Production runs use the v3 API: set `DEVIN_API_KEY` to a **service-user key** (recommended for a running service — Devin guidance reserves PATs for scripts acting as a human user) and `DEVIN_ORG_ID` to the Devin organization that owns the sessions. A PAT also works on v3 but sessions then run as that user.
-Leaving `DEVIN_ORG_ID` unset falls back to the legacy v1 service-user API (a startup warning is logged).
+Leaving `DEVIN_ORG_ID` unset falls back to the legacy v1 service-user API; the dashboard shows a Setup problem banner.
 Set `DEVIN_API_BASE_URL` only when the API base URL differs from its default.
 
 ## Security configuration
