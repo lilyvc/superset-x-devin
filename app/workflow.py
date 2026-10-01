@@ -5,6 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import ClassVar
 
+import httpx
+
 from .config import Settings
 from .devin_status import session_state
 from .gates import ci_verdict, dedup_candidates, intake_skip_reason
@@ -809,9 +811,22 @@ class WorkflowEngine:
         )
 
     async def comment(self, workflow: dict, body: str):
-        comment = await self.github.post_issue_comment(workflow["repo"], workflow["issue_number"], body)
+        """Post a status comment on the issue. Best-effort: a GitHub write
+        failure (e.g. missing Issues:write on the token) must not abort
+        session reconciliation — the pipeline continues and the miss is
+        recorded on the event timeline instead of retried every tick."""
+        try:
+            comment = await self.github.post_issue_comment(
+                workflow["repo"], workflow["issue_number"], body)
+        except httpx.HTTPStatusError as exc:
+            logger.warning("issue comment failed for %s#%s: %s",
+                           workflow["repo"], workflow["issue_number"], exc)
+            self.store.add_event(workflow["id"], "comment_failed",
+                                 detail={"error": str(exc), "body": body})
+            return None
         self.store.add_event(workflow["id"], "comment_posted",
                              detail={"comment_id": comment.get("id"), "body": body})
+        return comment
 
     async def handle_issue_event(self, payload: dict) -> dict:
         if payload.get("action") not in {"opened", "reopened"}:
