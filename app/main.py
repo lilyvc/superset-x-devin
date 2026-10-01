@@ -18,6 +18,7 @@ from .github_client import GitHubClient
 from .metrics import metrics
 from .poller import run_poller
 from .prompts import validate_skills
+from .states import Role, State
 from .store import Store
 from .workflow import WorkflowEngine
 
@@ -82,8 +83,7 @@ async def healthz():
     return {"ok": True, "target_repo": settings.target_repo}
 
 
-@app.post("/admin/poll-now")
-async def poll_now(request: Request):
+def _require_admin(request: Request) -> None:
     if not settings.admin_token:
         raise HTTPException(
             status_code=503,
@@ -91,11 +91,50 @@ async def poll_now(request: Request):
         )
     if request.headers.get("authorization") != f"Bearer {settings.admin_token}":
         raise HTTPException(status_code=401, detail="unauthorized")
+
+
+@app.post("/admin/poll-now")
+async def poll_now(request: Request):
+    _require_admin(request)
     # tick() serializes itself internally — no external lock needed.
     await request.app.state.engine.tick()
     return {"workflows": len(request.app.state.store.list_workflows()),
             "active_sessions": request.app.state.store.count_active_sessions(),
             "ran_at": datetime.now(timezone.utc).isoformat()}
+
+
+@app.post("/admin/workflows/{repo_owner}/{repo}/{number}/redispatch")
+async def redispatch(repo_owner: str, repo: str, number: int, request: Request):
+    """Operator override: send a dedup- or intake-skipped workflow back into
+    remediation. Clears prior dedup verdicts so the gate re-runs, and returns
+    the workflow to ROOT_CAUSE_FOUND so the next tick dispatches a fresh
+    dedup check then a remediator.
+    """
+    _require_admin(request)
+    store = request.app.state.store
+    workflow = store.get_workflow(f"{repo_owner}/{repo}", number)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    if workflow["state"] != State.SKIPPED.value:
+        raise HTTPException(
+            status_code=409,
+            detail=f"redispatch only applies to SKIPPED workflows, not {workflow['state']}",
+        )
+    if not workflow.get("root_cause_at"):
+        raise HTTPException(
+            status_code=409,
+            detail="workflow never reached ROOT_CAUSE_FOUND — nothing to remediate",
+        )
+    removed = store.delete_sessions(workflow["id"], Role.DEDUP)
+    store.set_state(workflow["id"], State.ROOT_CAUSE_FOUND,
+                    needs_info_kind=None, failure_reason=None,
+                    completed_at=None, waiting_since=None)
+    store.add_event(workflow["id"], "manual_redispatch",
+                    detail=f"operator redispatch; cleared {removed} dedup session(s)")
+    # tick() serializes itself internally — no external lock needed.
+    await request.app.state.engine.tick()
+    return {"workflow_id": workflow["id"], "state": State.ROOT_CAUSE_FOUND.value,
+            "dedup_sessions_cleared": removed}
 
 
 def _session_url(s: dict) -> str:
