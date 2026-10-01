@@ -23,8 +23,8 @@ class Settings:
 
     devin_api_key: str = os.getenv("DEVIN_API_KEY", "")
     devin_api_base_url: str = os.getenv("DEVIN_API_BASE_URL", "https://api.devin.ai")
-    # Set when authenticating with a Personal Access Token (cog_ user PAT):
-    # PATs use the org-scoped v3 API; service-user keys use v1. Leave empty for v1.
+    # Required for production: selects the org-scoped v3 API. Only leave empty
+    # when intentionally using the legacy v1 service-user path.
     devin_org_id: str = os.getenv("DEVIN_ORG_ID", "")
 
     max_acu_limit: int | None = (

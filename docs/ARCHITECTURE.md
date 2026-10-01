@@ -40,6 +40,8 @@ Two deterministic gates sit between agents and progress:
 
 Every completed Retro analysis is stored on its workflow. New Investigator and Retro prompts include the repo's recent defect-family findings (`known_defects_block` in `app/prompts.py`), so recurring patterns are recognized instead of rediscovered. Retro-filed issues carry `DEVIN_DISCOVERED` provenance: they are triaged and fixed like any issue but never get a retro of their own — follow-ups cannot recurse.
 
+Deliberately kept local rather than moved into Devin Knowledge/Playbooks: the prompt + structured-output contract + Python gate is one auditable unit in this repo, and the knowledge that matters here is defect-family findings scoped to this target repo. Devin Knowledge/Playbooks could host long-lived org knowledge later — the contract layer should not move.
+
 ## Replies and recovery
 
 Issue comments and PR review comments/reviews are forwarded to the active session; with no active session, the engine resumes the last eligible one, or spawns a recovery session carrying prior findings + the new context. `NOT_REPRODUCIBLE` and `BLOCKED` workflows re-open the same way on a reporter reply.
@@ -47,6 +49,14 @@ Issue comments and PR review comments/reviews are forwarded to the active sessio
 ## Persistence
 
 SQLite (`app/store.py`): `workflows` (state + structured outputs), `sessions` (role, ACUs, fingerprints), `events`, `deliveries` (webhook dedup), `issue_origins` (provenance). Session creation is `idempotent`; on restart the engine reconciles stored sessions before dispatching anything new — the pipeline is resumable at every point.
+
+## Resilience
+
+- **v3-first auth** — `DEVIN_ORG_ID` selects the org-scoped v3 API (the production path); without it the client falls back to legacy v1 and logs a warning. v1 and v3 build their request bodies separately.
+- **Retry/backoff** — every Devin call retries 429/5xx/network errors with exponential backoff + jitter, honoring `Retry-After`.
+- **Remote reconciliation** — sessions are tagged `repo:*`, `issue:*`, `role:*`. Before creating a session (and once after an ambiguous create failure) the engine asks Devin for a live session with those tags and adopts it — idempotency survives restarts and lost responses, not just local DB dedup.
+- **Serialized ticks** — `WorkflowEngine.tick()` holds an internal lock; concurrent ticks can't interleave dispatch.
+- **Full lifecycle** — a stalled session is nudged, then escalated *and* terminated remotely, so abandoned sessions stop consuming ACUs.
 
 ## Dashboard
 

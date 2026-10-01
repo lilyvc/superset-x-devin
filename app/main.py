@@ -33,11 +33,15 @@ async def lifespan(app: FastAPI):
     validate_skills()
     store = Store(settings.db_path)
     github = GitHubClient(settings.github_token, settings.github_api_url)
+    if not settings.devin_org_id:
+        logger.warning(
+            "DEVIN_ORG_ID is unset — using the legacy v1 sessions API. "
+            "Set DEVIN_ORG_ID for the production v3 path."
+        )
     devin = DevinClient(settings.devin_api_key,
                         settings.devin_api_base_url, settings.devin_org_id)
     engine = WorkflowEngine(settings, store, github, devin)
     app.state.engine, app.state.store = engine, store
-    app.state.tick_lock = asyncio.Lock()
     poller_task = None
     if settings.enable_polling:
         await engine.tick()
@@ -87,8 +91,8 @@ async def poll_now(request: Request):
         )
     if request.headers.get("authorization") != f"Bearer {settings.admin_token}":
         raise HTTPException(status_code=401, detail="unauthorized")
-    async with request.app.state.tick_lock:
-        await request.app.state.engine.tick()
+    # tick() serializes itself internally — no external lock needed.
+    await request.app.state.engine.tick()
     return {"workflows": len(request.app.state.store.list_workflows()),
             "active_sessions": request.app.state.store.count_active_sessions(),
             "ran_at": datetime.now(timezone.utc).isoformat()}

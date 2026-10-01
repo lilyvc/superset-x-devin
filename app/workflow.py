@@ -1,5 +1,6 @@
 """Deterministic, restart-safe multi-stage workflow engine."""
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import ClassVar
@@ -39,8 +40,15 @@ class WorkflowEngine:
         self._startup_baseline: int | None = None
         self._github_login: str | None = None
         self._budget_event_sent = False
+        # Serialized here so no two ticks can interleave dispatches, regardless
+        # of whether the caller remembered to hold an external lock.
+        self._tick_lock = asyncio.Lock()
 
     async def tick(self) -> None:
+        async with self._tick_lock:
+            await self._tick()
+
+    async def _tick(self) -> None:
         issues = []
         try:
             issues = await self.github.list_open_issues(self.settings.target_repo)
@@ -296,6 +304,15 @@ class WorkflowEngine:
             )
             return
         self.store.update_session(row["session_id"], active=0, finished_at=utcnow())
+        # Stop the remote session too — "we stopped waiting" must also mean
+        # "Devin stopped executing", otherwise the stall leaks ACUs forever.
+        try:
+            await self.devin.terminate_session(row["session_id"])
+            self.store.add_event(row["workflow_id"], "session_terminated",
+                                 detail=row["session_id"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not terminate stalled session %s: %s",
+                           row["session_id"], exc)
         workflow = self.store.get_workflow_by_id(row["workflow_id"])
         if workflow and workflow["state"] not in TERMINAL_STATES:
             self.store.set_state(
@@ -693,13 +710,26 @@ class WorkflowEngine:
             prompt += f"\n\n## Recovery context\n{extra_context}\n"
         tags = ["superset-x-devin", f"repo:{workflow['repo']}",
                 f"issue:{workflow['issue_number']}", f"role:{role.value}"]
-        session = await self.devin.create_session(
-            prompt, title=f"[{role.value}] {workflow['repo']}#{workflow['issue_number']}: {workflow.get('title', '')[:60]}",
-            tags=tags, structured_output_schema=schema,
-            max_acu_limit=limit if self.settings.max_acu_limit is None else min(limit, self.settings.max_acu_limit),
-            repos=[workflow["repo"]],
-            devin_mode=self.settings.role_devin_mode(role.value),
-        )
+        # Distributed idempotency: the tags identify the unit of work, so if a
+        # session already exists remotely (service restart, ambiguous create
+        # failure) adopt it instead of dispatching a duplicate.
+        session = await self._adopt_remote_session(workflow, role, tags)
+        if session is None:
+            try:
+                session = await self.devin.create_session(
+                    prompt,
+                    title=f"[{role.value}] {workflow['repo']}#{workflow['issue_number']}: {workflow.get('title', '')[:60]}",
+                    tags=tags, structured_output_schema=schema,
+                    max_acu_limit=limit if self.settings.max_acu_limit is None else min(limit, self.settings.max_acu_limit),
+                    repos=[workflow["repo"]],
+                    devin_mode=self.settings.role_devin_mode(role.value),
+                )
+            except Exception:
+                # The create may have succeeded remotely while the response was
+                # lost — try adoption once before surfacing the error.
+                session = await self._adopt_remote_session(workflow, role, tags)
+                if session is None:
+                    raise
         session_url = session.get("url") or (
             f"https://app.devin.ai/sessions/"
             f"{session['session_id'].removeprefix('devin-')}"
@@ -709,6 +739,25 @@ class WorkflowEngine:
         self.store.add_event(workflow["id"], "session_created", detail={"session_id": session["session_id"],
                                                                         "role": role.value})
         return session
+
+    async def _adopt_remote_session(
+        self, workflow: dict, role: Role, tags: list[str],
+    ) -> dict | None:
+        """Reconcile with Devin: adopt a live remote session for this unit of
+        work rather than spawning a duplicate. Returns None when adoption
+        isn't possible (no match, or the lookup itself failed)."""
+        try:
+            remote = await self.devin.adopt_session(tags)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("remote session lookup failed: %s", exc)
+            return None
+        if not remote or not remote.get("session_id"):
+            return None
+        self.store.add_event(
+            workflow["id"], "session_adopted",
+            detail={"session_id": remote["session_id"], "role": role.value},
+        )
+        return remote
 
     def _role_prompt(
         self,

@@ -1,9 +1,11 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from app.config import Settings
+from app.devin_client import DevinClient
 from app.gates import investigation_gate, verification_gate
 from app.handlers import SettledSession, handle_analyst
 from app.parsing import issue_number_from_url
@@ -121,6 +123,8 @@ class FakeDevin:
     def __init__(self):
         self.sessions: dict[str, dict] = {}
         self._counter = 0
+        self.terminated: list[str] = []
+        self.adoptable: dict | None = None
 
     async def create_session(self, prompt, *, title=None, tags=None,
                              structured_output_schema=None, max_acu_limit=None,
@@ -168,6 +172,12 @@ class FakeDevin:
         if session_id not in self.sessions:
             raise RuntimeError(f"unknown session {session_id}: cannot resume")
         return {"ok": True}
+
+    async def adopt_session(self, tags):
+        return self.adoptable
+
+    async def terminate_session(self, session_id, *, archive=False):
+        self.terminated.append(session_id)
 
     async def aclose(self):
         pass
@@ -842,3 +852,110 @@ def test_render_comments_caps_context():
     rendered = render_comments(comments)
     assert "c14" not in rendered and "c39" in rendered
     assert rendered.count("**u**") == 25
+
+
+def test_remote_session_is_adopted_instead_of_created(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = FakeDevin()
+    devin.adoptable = {
+        "session_id": "sess-remote", "status": "running",
+        "url": "https://app.devin.ai/sessions/sess-remote",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), devin)
+    asyncio.run(engine.tick())
+    sessions = store.get_sessions(1)
+    assert [s["session_id"] for s in sessions] == ["sess-remote"]
+    kinds = {e["kind"] for e in store.get_events(1)}
+    assert "session_adopted" in kinds and "session_created" in kinds
+
+
+def test_create_failure_falls_back_to_adoption(tmp_path):
+    class FlakyDevin(FakeDevin):
+        async def create_session(self, prompt, **kwargs):
+            raise RuntimeError("response lost")
+
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    devin = FlakyDevin()
+    devin.adoptable = {
+        "session_id": "sess-remote", "status": "running",
+        "url": "https://app.devin.ai/sessions/sess-remote",
+    }
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), devin)
+    asyncio.run(engine.tick())
+    assert [s["session_id"] for s in store.get_sessions(1)] == ["sess-remote"]
+
+
+def test_stalled_session_is_terminated_remotely(tmp_path):
+    settings = _settings(tmp_path, session_stall_seconds=3600)
+    store = Store(settings.db_path)
+    github = FakeGitHub([_issue()])
+    devin = StuckDevin()
+    engine = WorkflowEngine(settings, store, github, devin)
+    asyncio.run(engine.tick())
+    session_id = store.get_sessions(1)[0]["session_id"]
+    _age_session(store, session_id, hours=3)
+    asyncio.run(engine.tick())
+    assert devin.terminated == [session_id]
+    assert store.get_workflow("owner/repo", 1)["state"] == State.ESCALATED.value
+
+
+def test_concurrent_ticks_are_serialized(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    engine = WorkflowEngine(settings, store, FakeGitHub([_issue()]), FakeDevin())
+    entered = []
+    original = engine._tick
+    gate = asyncio.Event()
+
+    async def spy():
+        entered.append("start")
+        await gate.wait()
+        await original()
+
+    engine._tick = spy
+
+    async def run():
+        first = asyncio.create_task(engine.tick())
+        while not entered:
+            await asyncio.sleep(0)
+        second = asyncio.create_task(engine.tick())
+        await asyncio.sleep(0.05)
+        # The second tick must be blocked on the engine's internal lock.
+        assert len(entered) == 1
+        gate.set()
+        await asyncio.gather(first, second)
+
+    asyncio.run(run())
+    assert entered == ["start", "start"]
+
+
+def test_devin_client_retries_transient_errors():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if len(calls) < 3:
+            return httpx.Response(429, headers={"retry-after": "0"})
+        return httpx.Response(200, json={"session_id": "s1", "url": "u"})
+
+    client = DevinClient("k", org_id="org-x",
+                         transport=httpx.MockTransport(handler))
+    client._sleep = lambda attempt, resp=None: asyncio.sleep(0)
+    out = asyncio.run(client.create_session("p"))
+    assert out["session_id"] == "s1" and len(calls) == 3
+    asyncio.run(client.aclose())
+
+
+def test_devin_client_gives_up_after_max_retries():
+    def handler(request):
+        return httpx.Response(503)
+
+    client = DevinClient("k", org_id="org-x", max_retries=2,
+                         transport=httpx.MockTransport(handler))
+    client._sleep = lambda attempt, resp=None: asyncio.sleep(0)
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(client.create_session("p"))
+    asyncio.run(client.aclose())
