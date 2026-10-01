@@ -99,9 +99,9 @@ class Settings:
 
     # Polling mode: watch the target repo for new issues/comments instead of
     # (or in addition to) webhooks. No public URL needed.
-    enable_polling: bool = _env_bool("ENABLE_POLLING", False)
+    enable_polling: bool = _env_bool("ENABLE_POLLING", True)
     github_poll_interval_seconds: float = float(
-        os.getenv("GITHUB_POLL_INTERVAL_SECONDS", "30")
+        os.getenv("GITHUB_POLL_INTERVAL_SECONDS", "5")
     )
     # When false, issues that already exist at startup are baselined (not
     # dispatched); when true the open-issues backlog is discovered too.
