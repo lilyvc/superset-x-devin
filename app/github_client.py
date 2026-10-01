@@ -131,11 +131,6 @@ class GitHubClient:
                 break
         return reviews
 
-    async def get_authenticated_user(self) -> dict:
-        resp = await self._client.get("/user")
-        resp.raise_for_status()
-        return resp.json()
-
     async def post_issue_comment(self, repo: str, issue_number: int, body: str) -> dict:
         resp = await self._client.post(
             f"/repos/{repo}/issues/{issue_number}/comments", json={"body": body}
