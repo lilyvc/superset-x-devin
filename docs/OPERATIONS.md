@@ -37,7 +37,7 @@ The service checks `X-Hub-Signature-256` and deduplicates deliveries by `X-GitHu
 It accepts opened or reopened issue events, created issue comments, created pull request review comments, submitted pull request reviews, and ping events.
 
 Use polling when the service does not have a public URL.
-Set `ENABLE_POLLING=true` and `GITHUB_POLL_INTERVAL_SECONDS`.
+Polling is on by default (`ENABLE_POLLING=true`) and runs every `GITHUB_POLL_INTERVAL_SECONDS` (5s).
 The service runs one tick at startup and repeats a tick at the configured interval.
 Set `POLL_BACKLOG=false` to baseline existing issues at startup instead of processing them.
 Keep the host and service running for polling to continue.
@@ -119,8 +119,8 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `REMEDIATOR_DEVIN_MODE` | `fusion` | Agent mode for a Remediator session |
 | `ANALYST_DEVIN_MODE` | empty | Agent mode for a Retro Devin session |
 | `DB_PATH` | `orchestrator.db` | SQLite database path; Compose uses `/data/orchestrator.db` |
-| `ENABLE_POLLING` | `false` | Starts periodic GitHub polling |
-| `GITHUB_POLL_INTERVAL_SECONDS` | `30` | Delay between polling ticks |
+| `ENABLE_POLLING` | `true` | Starts periodic GitHub polling |
+| `GITHUB_POLL_INTERVAL_SECONDS` | `5` | Delay between polling ticks |
 | `POLL_BACKLOG` | `true` | Processes open issues that existed at startup |
 
 Boolean values accept `1`, `true`, `yes`, or `on`, without regard to letter case.

@@ -38,7 +38,7 @@ To force an immediate poll instead of waiting for the interval:
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8000/admin/poll-now
 ```
 
-Optional: point a GitHub webhook (`issues`, `issue_comment`, `pull_request_review`, `pull_request_review_comment` events) at `POST /webhooks/github` and set `GITHUB_WEBHOOK_SECRET` for instant intake instead of polling.
+The service polls `TARGET_REPO` every 5 seconds by default, so it works anywhere Docker runs — no public URL needed. It also supports GitHub webhooks (`POST /webhooks/github` for `issues`, `issue_comment`, `pull_request_review`, and `pull_request_review_comment` events, verified with `GITHUB_WEBHOOK_SECRET`) for instant delivery in production where the service is publicly reachable. For a local demo, polling is the simpler choice — the service just sweeps the repo every few seconds.
 
 See [Operations](docs/OPERATIONS.md) for the full configuration reference.
 
