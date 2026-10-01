@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from .states import State
+
 JSON_WORKFLOW_FIELDS = {"labels", "triage", "investigation", "remediation", "analysis"}
 JSON_SESSION_FIELDS = {"structured_output", "pull_requests"}
 
@@ -255,6 +257,15 @@ class Store:
     def count_active_sessions(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT count(*) FROM sessions WHERE active=1").fetchone()[0]
+
+    def count_running_sessions(self) -> int:
+        """Active sessions that are not parked waiting on a human reply."""
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT count(*) FROM sessions s JOIN workflows w ON w.id=s.workflow_id "
+                "WHERE s.active=1 AND w.state NOT IN (?, ?)",
+                (State.NEEDS_INFO.value, State.BLOCKED.value),
+            ).fetchone()[0]
 
     def total_acus(self) -> float:
         with self._conn() as conn:

@@ -60,7 +60,7 @@ Protect the token as a production credential.
 
 ### Devin credential
 
-Production runs use the v3 API: set `DEVIN_API_KEY` to a personal access token and `DEVIN_ORG_ID` to the Devin organization that owns the sessions.
+Production runs use the v3 API: set `DEVIN_API_KEY` to a **service-user key** (recommended for a running service — Devin guidance reserves PATs for scripts acting as a human user) and `DEVIN_ORG_ID` to the Devin organization that owns the sessions. A PAT also works on v3 but sessions then run as that user.
 Leaving `DEVIN_ORG_ID` unset falls back to the legacy v1 service-user API (a startup warning is logged).
 Set `DEVIN_API_BASE_URL` only when the API base URL differs from its default.
 
@@ -87,9 +87,9 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `GITHUB_WEBHOOK_SECRET` | empty | HMAC secret for webhook verification |
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL; set for GHES |
 | `ADMIN_TOKEN` | empty | Bearer token for `POST /admin/poll-now` |
-| `DEVIN_API_KEY` | empty | Devin personal access token (v3) or legacy service-user key (v1) |
+| `DEVIN_API_KEY` | empty | Devin service-user key (production) or PAT (human scripts) |
 | `DEVIN_API_BASE_URL` | `https://api.devin.ai` | Devin API base URL |
-| `DEVIN_ORG_ID` | empty | Required for production — selects the v3 API; empty = legacy v1 |
+| `DEVIN_ORG_ID` | empty | Required for production — selects the org-scoped v3 API; empty = legacy v1 |
 | `MAX_ACU_LIMIT` | unset | Optional ACU cap for each Devin session |
 | `ELIGIBILITY_LABEL` | empty | Optional label required for issue intake |
 | `MAX_NEW_ISSUES_PER_POLL` | `5` | Maximum newly discovered issues admitted per poll |
@@ -99,7 +99,7 @@ Defaults below come from `app/config.py`. Compose overrides `DB_PATH` inside the
 | `IGNORE_ISSUE_TYPES` | `feature,task,epic` | Issue types that block intake |
 | `TRIAGE_ENABLED` | `true` | Starts a Triage session for admitted issues |
 | `TRIAGE_ACU_LIMIT` | `2` | ACU cap for a Triage session |
-| `MAX_CONCURRENT_DEVINS` | `3` | Maximum active sessions across roles |
+| `MAX_CONCURRENT_DEVINS` | `3` | Maximum running sessions across roles (sessions parked in `NEEDS_INFO`/`BLOCKED` don't hold a slot) |
 | `MAX_REMEDIATION_ATTEMPTS` | `2` | Maximum verification retries |
 | `MAX_TOTAL_ACUS` | unset | Optional total ACU budget across sessions |
 | `DEDUP_ENABLED` | `true` | Checks open PRs before remediation |

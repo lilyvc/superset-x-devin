@@ -668,7 +668,7 @@ class WorkflowEngine:
                            "no new Devin sessions will be dispatched.",
                 )
             return
-        capacity = max(0, self.settings.max_concurrent_devins - self.store.count_active_sessions())
+        capacity = max(0, self.settings.max_concurrent_devins - self.store.count_running_sessions())
         if not capacity:
             return
         workflows = self.store.list_workflows()
@@ -850,7 +850,16 @@ class WorkflowEngine:
         )
 
     async def comment(self, workflow: dict, body: str):
-        comment = await self.github.post_issue_comment(workflow["repo"], workflow["issue_number"], body)
+        # Best-effort: a status comment must never abort a state transition,
+        # or the settled session is re-handled every tick.
+        try:
+            comment = await self.github.post_issue_comment(
+                workflow["repo"], workflow["issue_number"], body)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not comment on #%s: %s", workflow["issue_number"], exc)
+            self.store.add_event(workflow["id"], "comment_failed",
+                                 detail={"error": str(exc), "body": body})
+            return
         self.store.add_event(workflow["id"], "comment_posted",
                              detail={"comment_id": comment.get("id"), "body": body})
 
